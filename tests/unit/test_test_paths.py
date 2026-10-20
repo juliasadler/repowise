@@ -56,6 +56,8 @@ _CORPUS: tuple[tuple[str, str | None, str], ...] = (
     ("packages/web/src/app/repos/[id]/tests/page.tsx", None, ""),
     ("packages/web/src/components/tests/tests-view.tsx", None, ""),
     ("src/components/tests/TestsView.vue", None, ""),
+    ("Src/Tests/page.svelte", None, ""),
+    ("packages/web/tests/page.tsx", None, "test"),
     ("src/components/tests/Button.test.tsx", None, "test"),
     ("src/__tests__/tests/helpers.ts", None, "test"),
     ("src/tests/__mocks__/api.ts", None, "support"),
