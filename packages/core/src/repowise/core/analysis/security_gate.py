@@ -38,6 +38,7 @@ from typing import Any
 from repowise.core.ci import baseline as ci_baseline
 from repowise.core.ci import github, gitlab, sarif
 from repowise.core.ci.markdown import ROW_LIMIT, cell, details, more_line, plural
+from repowise.core.ci.summary import FAIL, PASS, WARN, GateSummary, SummaryFinding
 from repowise.core.support_paths import DOC_EXTENSIONS
 
 from .change_risk.features import GIT_TIMEOUT_SECONDS, _git, revspec_head, split_revspec
@@ -921,6 +922,32 @@ def github_annotations(findings: Sequence[Mapping[str, Any]], gate: GateResult) 
         )
         (errors if level == "error" else warnings).append(line)
     return github.cap_annotations(errors + warnings, noun="security findings")
+
+
+def gate_summary(findings: Sequence[Mapping[str, Any]], gate: GateResult) -> GateSummary:
+    """The gate's row in the combined CI summary, leveled as :func:`github_annotations` is."""
+    failing = {f["fingerprint"] for f in gate.failing}
+    accepted = {f["fingerprint"] for f in gate.baselined}
+    rows = tuple(
+        SummaryFinding(
+            "error" if f["fingerprint"] in failing else "warning",
+            str(f["file_path"]),
+            None if f["commit"] else int(f["line_number"]),
+            _message(f),
+            str(f["fingerprint"]),
+        )
+        for f in _order(findings)
+        if f["fingerprint"] not in accepted
+    )
+    below = sum(r.level == "warning" for r in rows)
+    if not gate.passed:
+        at = len(rows) - below
+        verdict, headline = FAIL, f"{plural(at, 'new finding')} at {gate.fail_on} or above."
+    elif below:
+        verdict, headline = WARN, f"{plural(below, 'new finding')} below {gate.fail_on}."
+    else:
+        verdict, headline = PASS, "No new finding."
+    return GateSummary("security", verdict, headline, rows)
 
 
 def _rule_id(kind: str) -> str:

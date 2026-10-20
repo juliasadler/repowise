@@ -138,12 +138,16 @@ release the action installs.
 | `security-baseline` | none | Committed baseline file. |
 | `health-fail-on` | `introduced` | What fails the health gate: `introduced`, or `worsened` to fail on findings the change made worse too. |
 | `risk-fail-above-percentile` | none | With `risk` in `checks`, fail when the change ranks above this percentile of recent commits. Empty reports the rank without gating. |
+| `comment` | `false` | Post one pull-request comment summarizing every gate, updated in place on each run. |
+| `github-token` | `github.token` | Token the summary comment is posted with. |
 | `upload-sarif` | `false` | Upload doc drift, security and health findings to code scanning. |
 | `impacted-tests` | `false` | Select the tests the change needs (needs a cached `.repowise` index); see [below](#selecting-the-tests-a-change-needs). |
 | `impacted-tests-runner` | `auto` | `auto`, `pytest`, `go`, `jest` or `files`. |
 
 Outputs: `coverage`, `doc-drift`, `security`, `health` and `risk` hold each gate's exit
-code (empty when not run), and `sarif-dir` the SARIF directory.
+code (empty when not run), `verdict` combines them (`fail` when any gate failed
+or could not evaluate, `warn` when any passed with warnings, else `pass`), and
+`sarif-dir` holds the SARIF directory.
 `impacted-tests` holds the runner arguments (or `:all`), and `run-all-tests` is
 `false` only when that subset is safe to run alone.
 
@@ -158,9 +162,18 @@ fetches the missing history and the target branch first. Checking out with
 
 **Code scanning.** With `upload-sarif: true` the findings appear in the
 repository's Security tab and on the pull request's diff. The job then needs
-`security-events: write` (and `actions: read` in a private repository). A pull
+`security-events: write` (and `actions: read` in a private repository). Each
+result's `partialFingerprints` holds a line-free id, so an edit above a finding
+keeps the same alert. A pull
 request from a fork runs with a read-only token, so the upload is skipped
 there with a warning; the gates still run and still decide the check.
+
+**Summary comment.** The job summary ends with a table of every gate and its
+result. With `comment: true` the same table, plus each gate's findings,
+goes into one pull-request comment that later runs edit rather than repeat; the
+job needs `pull-requests: write`. Each finding carries a hidden
+`repowise-fingerprint:v1` marker with its line-free id, so the comment counts
+what a push resolved.
 
 **Without the action,** each gate is one step:
 

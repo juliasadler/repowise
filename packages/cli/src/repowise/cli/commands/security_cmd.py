@@ -30,6 +30,7 @@ from repowise.cli.ci import (
     change_lines,
     ci_notices,
     repo_root,
+    write_gate_summary,
 )
 from repowise.cli.helpers import (
     console,
@@ -498,11 +499,12 @@ def _emit_markdown(v: _Verdict) -> None:
 
 
 def _emit_github(v: _Verdict) -> None:
-    from repowise.core.analysis.security_gate import github_annotations
+    from repowise.core.analysis.security_gate import gate_summary, github_annotations
 
     for line in github_annotations(v.scan.findings, v.gate):
         click.echo(line)
     append_step_summary(_markdown(v))
+    write_gate_summary(gate_summary(v.scan.findings, v.gate))
 
 
 _SEVERITY_COLOUR = {"high": "red", "med": "yellow", "low": "dim"}

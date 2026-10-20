@@ -45,6 +45,7 @@ from repowise.cli.ci import (
     change_lines,
     ci_notices,
     repo_root,
+    write_gate_summary,
 )
 from repowise.cli.helpers import console, repo_index_session, run_async
 from repowise.cli.output import emit_json, format_option
@@ -588,7 +589,11 @@ def _coverage_config(
 
 
 def _emit(pc, fmt: str) -> None:
-    from repowise.core.analysis.patch_coverage import github_annotations, render_markdown
+    from repowise.core.analysis.patch_coverage import (
+        gate_summary,
+        github_annotations,
+        render_markdown,
+    )
 
     if fmt == "json":
         emit_json(pc.to_dict())
@@ -598,6 +603,7 @@ def _emit(pc, fmt: str) -> None:
         for line in github_annotations(pc):
             click.echo(line)
         append_step_summary(render_markdown(pc))
+        write_gate_summary(gate_summary(pc))
         _print_summary(pc)
     else:
         _print_summary(pc)

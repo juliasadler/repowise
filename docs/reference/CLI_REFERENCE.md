@@ -38,6 +38,7 @@ Grouped by what you're trying to do, not alphabetically. `PATH` and flag details
 [`doc-drift`](#repowise-doc-drift-path) ·
 [`security`](#repowise-security) ·
 [`check`](#repowise-check-revspec) ·
+[`ci-summary`](#repowise-ci-summary-dir) ·
 [`impacted-tests`](#repowise-impacted-tests-revspec) ·
 [`coverage`](#repowise-coverage) ·
 [`components`](#repowise-components) ·
@@ -1700,6 +1701,16 @@ repowise check [REVSPEC] [--path PATH] [--policies FILE] [--sarif-file FILE] [--
 ```
 
 Teams that already run OPA can use the `evidence` object of `repowise check --format json` as OPA `input`: it is the change's evidence checklist, one item per kind (`components_touched`, `provenance`, `reaching_tests`, `decisions_crossed`, `contracts`) with its status, basis and per-file details. `opa eval --input check.json --data policy.rego 'data.repowise.deny'` then evaluates Rego rules over `input.evidence.items` next to, or instead of, `policies.yaml`.
+
+---
+
+### `repowise ci-summary DIR`
+
+Combines the gates a CI job ran into one verdict table, appended to the GitHub job summary, and prints the combined verdict (`pass`, `warn` or `fail`). Each gate run with `--format github` while `REPOWISE_GATE_SUMMARY_DIR` names a directory leaves its result there, and each `--gate NAME=EXIT_CODE` reconciles one with its exit code; a gate that left nothing reads as could not evaluate. `--comment-file` writes a pull-request comment that also lists each gate's findings, and `--previous` (the comment it replaces) adds how many findings were resolved since.
+
+```bash
+repowise ci-summary DIR --gate NAME=EXIT_CODE... [--comment-file FILE] [--previous FILE]
+```
 
 ---
 

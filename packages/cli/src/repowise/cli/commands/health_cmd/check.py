@@ -24,6 +24,7 @@ from repowise.cli.ci import (
     cannot_evaluate,
     ci_revspec,
     repo_root,
+    write_gate_summary,
 )
 from repowise.cli.helpers import console, silence_logs_for_machine_output_until_close
 from repowise.cli.output import emit_json, format_option
@@ -153,11 +154,12 @@ def _emit_markdown(v: _Verdict) -> None:
 
 
 def _emit_github(v: _Verdict) -> None:
-    from repowise.core.analysis.health_gate import github_annotations
+    from repowise.core.analysis.health_gate import gate_summary, github_annotations
 
     for line in github_annotations(v.result):
         click.echo(line)
     append_step_summary(_markdown(v))
+    write_gate_summary(gate_summary(v.result))
 
 
 _COLOUR = {"error": "red", "warning": "yellow", "note": "dim"}

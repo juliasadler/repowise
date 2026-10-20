@@ -21,6 +21,7 @@ from typing import Any
 
 from repowise.core.ci import github, gitlab, sarif
 from repowise.core.ci.markdown import ROW_LIMIT, cell, details, more_line, plural
+from repowise.core.ci.summary import GateSummary, SummaryFinding
 
 from ..test_paths import is_test_related_path
 from .change_health.identity import severity_rank
@@ -331,6 +332,21 @@ def github_annotations(result: GateResult) -> list[str]:
         for f in [*result.at(ERROR), *result.at(WARNING)]
     ]
     return github.cap_annotations(out, noun="health findings")
+
+
+def gate_summary(result: GateResult) -> GateSummary:
+    """The gate's row in the combined CI summary: errors and warnings, notes left out."""
+    errors, warnings = result.at(ERROR), result.at(WARNING)
+    headline = {
+        PASS: "Nothing this change wrote fails the gate.",
+        WARN: f"Passed with {plural(len(warnings), 'warning')}.",
+        FAIL: f"Fails on {plural(len(errors), 'finding')} the change wrote.",
+    }[result.verdict]
+    findings = tuple(
+        SummaryFinding(f.level, f.path, f.line, f.message, f.fingerprint)
+        for f in [*errors, *warnings]
+    )
+    return GateSummary(_SOURCE, result.verdict, headline, findings)
 
 
 def render_sarif(result: GateResult, *, tool_version: str) -> dict:
