@@ -199,7 +199,7 @@ from .model import (
     rank_reaching,
     tests_matching_by_name,
 )
-from .type_only import is_type_only
+from .type_only import is_type_only, read_under, type_only_files
 from .walk import CLOSURE_SEED_CAP, reach_states, reaching_by_tier
 
 __all__ = [
@@ -246,10 +246,12 @@ __all__ = [
     "reach_states",
     "reach_states_from_db",
     "reaching_by_tier",
+    "read_under",
     "rust_has_inline_tests",
     "tests_matching_by_name",
     "tests_reaching",
     "tests_reaching_by_tier",
     "tests_reaching_through_helpers",
+    "type_only_files",
     "unscanned_test_files",
 ]
