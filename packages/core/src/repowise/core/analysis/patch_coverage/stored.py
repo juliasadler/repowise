@@ -16,9 +16,13 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..git_cli import _git, untracked_paths
+from ..git_cli import _git, run_git, untracked_paths
 from ..health.coverage.discovery import CoverageScope
-from ..health.coverage.freshness import coverage_freshness, working_tree_freshness
+from ..health.coverage.freshness import (
+    FreshnessStatus,
+    coverage_freshness,
+    working_tree_freshness,
+)
 from .compute import BranchData, PatchCoverage, PatchScope, compute_patch_coverage
 from .delta import ProjectDelta, ProjectTotals, incomparable_reasons
 from .risk import IndexFacts
@@ -117,6 +121,39 @@ async def _stale_files(
         return files
     since = await asyncio.to_thread(_changed_since, repo_path, measured_commit, until)
     return files if since is None else files & since
+
+
+async def file_on_disk_freshness(
+    repo_path: str | None, measured_commit: str | None, file_path: str
+) -> FreshnessStatus:
+    """Whether coverage measured at *measured_commit* still lines up with *file_path* on disk.
+
+    The ``stale_file`` rule for one file read from the working tree: ``stale``
+    when git shows it differs from the measured commit or is untracked,
+    ``unknown`` when git cannot tell (no *repo_path*, no measured commit, a
+    commit this clone lacks). *file_path* is relative to *repo_path*.
+    """
+    if not repo_path or not measured_commit:
+        return "unknown"
+    return await asyncio.to_thread(_file_freshness, repo_path, measured_commit, file_path)
+
+
+def _file_freshness(repo_path: str, since: str, file_path: str) -> FreshnessStatus:
+    # Scoped to the one path, so the cost does not grow with the repo, and
+    # relative to *repo_path* even when it sits below the git top level.
+    spec = ["--", f":(literal){file_path}"]
+    try:
+        diff = run_git(["diff", "--quiet", "--no-renames", since, *spec], repo_path)
+        if diff.returncode == 1:
+            return "stale"
+        if diff.returncode != 0:
+            return "unknown"
+        untracked = run_git(["ls-files", "--others", "--exclude-standard", *spec], repo_path)
+    except (subprocess.SubprocessError, OSError):
+        return "unknown"
+    if untracked.returncode != 0:
+        return "unknown"
+    return "stale" if untracked.stdout.strip() else "current"
 
 
 def _changed_since(repo_path: str, since: str, until: str | None) -> set[str] | None:
