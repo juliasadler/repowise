@@ -98,6 +98,11 @@ log = structlog.get_logger(__name__)
 # Not a licence to move a calibrated scoring weight — those are frozen
 # independently of this stamp.
 #
+# v42: a JavaScript-family file under a ``tests/`` folder inside a ``src`` tree
+# is production unless its name or a test directory says otherwise, and the
+# cross-file assertion pass reads the stored test flag, which moves scope and
+# findings for those files.
+#
 # v41 (also): a loop that grows only by reading tables that do not grow with
 # the repository is bounded (``perf.table_scale``), so its causes leave the queue.
 # v41 (also): ``docs`` / ``docs_src`` count as a docs root only at the
@@ -398,7 +403,7 @@ log = structlog.get_logger(__name__)
 # forms. Files that were counted untested and are not become tested, which
 # moves untested-hotspot findings and the scores that carry them, on every
 # language with a prefix or spec convention rather than Ruby alone.
-HEALTH_ANALYZER_VERSION = 41
+HEALTH_ANALYZER_VERSION = 42
 
 
 def _log_duplication_diagnostics(report: DuplicationReport) -> None:
