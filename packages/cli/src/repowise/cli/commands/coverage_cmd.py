@@ -1,9 +1,9 @@
 """``repowise coverage`` — ingest and inspect test-coverage reports.
 
 The single entry point for coverage. ``coverage add`` populates per-file
-line/branch coverage (which clears ``untested_hotspot`` for tested files) and,
-when a report carries contexts (a coverage.py ``.coverage`` or a per-test
-lcov), also builds the per-test "test-to-code" map. ``repowise health
+line/branch coverage from a text report (which clears ``untested_hotspot`` for
+tested files) and, when a report carries contexts (a coverage.py ``.coverage``
+or a per-test lcov), also builds the per-test "test-to-code" map. ``repowise health
 --recompute`` (or the next ``repowise update``) then folds in whatever was ingested here - it no longer takes a coverage flag of
 its own.
 """
@@ -27,7 +27,10 @@ from repowise.cli.helpers import (
 )
 from repowise.cli.output import emit_json, format_option, notice_console
 from repowise.core.analysis.health.coverage import PARSERS as COVERAGE_PARSERS
-from repowise.core.analysis.health.coverage.contexts import PER_TEST_COVERAGE_COMMAND
+from repowise.core.analysis.health.coverage.contexts import (
+    PER_TEST_COVERAGE_COMMAND,
+    is_coverage_data_file,
+)
 from repowise.core.workspace.update import get_head_commit
 
 
@@ -109,11 +112,12 @@ def coverage_add(
     re-ingest hook to .claude/settings.local.json (removed again when the flag
     is not true).
 
-    Stores per-file line/branch coverage, and additionally the per-test
+    Stores per-file line/branch coverage from text reports, and the per-test
     "test-to-code" map when a report carries contexts - a coverage.py
     ``.coverage`` recorded with ``pytest --cov --cov-context=test``, or a per-test
-    lcov. The map is what answers "which tests exercise this change"; reports
-    without contexts ingest per-file coverage only.
+    lcov. The map is what answers "which tests exercise this change". A
+    ``.coverage`` gives the map only: it does not record which lines are
+    executable, so export it with ``coverage lcov`` for per-file coverage.
 
     Examples:
 
@@ -171,11 +175,6 @@ def coverage_add(
             + ", ".join(p.name for p in report_paths[:5])
         )
 
-    # The aggregate parsers read text (lcov/xml/json); the coverage.py
-    # ``.coverage`` sqlite only feeds the per-test map, so keep it out of the
-    # text-parsing path (its binary bytes would not decode as UTF-8).
-    agg_paths = [p for p in report_paths if not _is_sqlite(p)]
-
     async def _do() -> bool:
         from repowise.core.persistence import (
             create_engine,
@@ -223,71 +222,74 @@ def coverage_add(
             agg_matched = 0
             unmapped = 0
             mapping_partial = False
-            if agg_paths:
-                resolved, errors = build_coverage_map(
-                    repo_path,
-                    agg_paths,
-                    repo_keys,
-                    coverage_format=coverage_format or cfg.format,
-                    strip_prefix=cfg.strip_prefix,
-                    path_prefix=cfg.path_prefix,
-                    report_prefixes=report_prefixes,
-                    ignore=cfg.ignore,
+            # The same read init runs; a ``.coverage`` comes back in *errors*
+            # with why it has no per-file coverage, then feeds the map below.
+            resolved, errors = build_coverage_map(
+                repo_path,
+                report_paths,
+                repo_keys,
+                coverage_format=coverage_format or cfg.format,
+                strip_prefix=cfg.strip_prefix,
+                path_prefix=cfg.path_prefix,
+                report_prefixes=report_prefixes,
+                ignore=cfg.ignore,
+            )
+            for path, err in errors:
+                console.print(f"[yellow]  {path.name}: {err}[/yellow]")
+            # Counted from `resolved`, not from inside the `resolved.files`
+            # branch below: total mapping loss leaves `files` empty, so
+            # reading the count in there reported 0 report files unmapped
+            # for the one run where every single one of them was.
+            skipped = resolved.unmatched + resolved.ambiguous
+            unmapped = len(skipped)
+            mapping_partial = resolved.mapping_partial
+            if resolved.files:
+                await save_coverage_files(
+                    session,
+                    repo_row.id,
+                    resolved.files,
+                    source_format=resolved.source_format or "lcov",
+                    ingested_commit_sha=head_sha,
+                    provenance=resolved.provenance,
                 )
-                for path, err in errors:
-                    console.print(f"[yellow]  {path.name}: {err}[/yellow]")
-                # Counted from `resolved`, not from inside the `resolved.files`
-                # branch below: total mapping loss leaves `files` empty, so
-                # reading the count in there reported 0 report files unmapped
-                # for the one run where every single one of them was.
-                skipped = resolved.unmatched + resolved.ambiguous
-                unmapped = len(skipped)
-                mapping_partial = resolved.mapping_partial
-                if resolved.files:
-                    await save_coverage_files(
-                        session,
-                        repo_row.id,
-                        resolved.files,
-                        source_format=resolved.source_format or "lcov",
-                        ingested_commit_sha=head_sha,
-                        provenance=resolved.provenance,
-                    )
-                    agg_matched = resolved.matched
+                agg_matched = resolved.matched
+                console.print(
+                    f"[green]Ingested coverage for {resolved.matched} file(s)[/green] "
+                    f"({resolved.matched_exact} exact, {resolved.matched_suffix} resolved)."
+                )
+                if skipped:
+                    sample = ", ".join(skipped[:5])
                     console.print(
-                        f"[green]Ingested coverage for {resolved.matched} file(s)[/green] "
-                        f"({resolved.matched_exact} exact, {resolved.matched_suffix} resolved)."
+                        f"[yellow]{len(skipped)} report file(s) did not map to the "
+                        f"repo tree[/yellow] (e.g. {sample})."
                     )
-                    if skipped:
-                        sample = ", ".join(skipped[:5])
-                        console.print(
-                            f"[yellow]{len(skipped)} report file(s) did not map to the "
-                            f"repo tree[/yellow] (e.g. {sample})."
-                        )
-                    if mapping_partial:
-                        console.print(
-                            "[red]More than half the report did not map to the repo "
-                            "tree.[/red] The stored coverage describes only a fragment "
-                            "of the repository. Fix [cyan]coverage.strip_prefix[/cyan] "
-                            "or [cyan]coverage.path_prefix[/cyan] in "
-                            ".repowise/config.yaml and re-run."
-                        )
+                if mapping_partial:
+                    console.print(
+                        "[red]More than half the report did not map to the repo "
+                        "tree.[/red] The stored coverage describes only a fragment "
+                        "of the repository. Fix [cyan]coverage.strip_prefix[/cyan] "
+                        "or [cyan]coverage.path_prefix[/cyan] in "
+                        ".repowise/config.yaml and re-run."
+                    )
 
             # --- Per-test map, from any report that carries contexts.
             map_records: list = []
             map_format: str | None = None
+            map_readable = False
             for report_path in report_paths:
                 creport = parse_contexts_file(report_path)
                 if not creport.has_contexts:
                     # A plain lcov without TN is normal (handled as aggregate
                     # above); a .coverage without contexts is worth calling out
                     # so the user knows why no map was built.
-                    if _is_sqlite(report_path):
+                    if is_coverage_data_file(report_path):
                         console.print(
                             f"[yellow]{report_path.name}: no per-test contexts "
                             f"(recorded without per-test contexts); per-test map "
                             f"skipped.[/yellow]"
                         )
                     continue
+                map_readable = True
                 rtc = resolve_test_reports(
                     creport,
                     repo_keys,
@@ -317,6 +319,10 @@ def coverage_add(
                 )
 
             if not agg_matched and not map_records:
+                if len(errors) == len(report_paths) and not map_readable:
+                    # No report was readable as coverage; the lines above say why.
+                    console.print("[red]Nothing was stored.[/red]")
+                    return False
                 console.print(
                     "[red]No report files mapped to indexed source files.[/red] "
                     "If paths look prefixed (e.g. build/…), set "
@@ -352,18 +358,6 @@ def coverage_add(
     from repowise.cli.commands.augment_cmd.coverage_reingest import sync_repo_hook
 
     sync_repo_hook(repo_path, console)
-
-
-_SQLITE_MAGIC = b"SQLite format 3\x00"
-
-
-def _is_sqlite(path: Path) -> bool:
-    """True when *path* is a coverage.py ``.coverage`` sqlite (binary magic)."""
-    try:
-        with path.open("rb") as fh:
-            return fh.read(len(_SQLITE_MAGIC)) == _SQLITE_MAGIC
-    except OSError:
-        return False
 
 
 def _discover_context_reports(repo_path: Path) -> list[Path]:

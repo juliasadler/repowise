@@ -1415,15 +1415,17 @@ successful ingest also syncs the opt-in coverage re-ingest hook
 (`hooks.coverage_reingest`).
 
 `add` ingests per-file line/branch coverage from LCOV, Cobertura, Clover,
-JaCoCo XML, a Go coverprofile (`go test -coverprofile`), or a coverage.py
-`.coverage` file. It auto-discovers `coverage/lcov.info`, `.coverage`,
+JaCoCo XML, or a Go coverprofile (`go test -coverprofile`). A coverage.py
+`.coverage` file records the lines that ran but not which lines are executable,
+so it gives the per-test map only; export it with `coverage lcov` for per-file
+coverage. It auto-discovers `coverage/lcov.info`, `.coverage`,
 `coverage.out`, `target/site/jacoco/jacoco.xml`, and similar reports when no
 path is given, and
 merges multiple reports (hit wins). When the report carries per-test contexts,
 a coverage.py `.coverage` recorded with per-test contexts
 (`pytest --cov=<package> --cov-context=test`, needs pytest-cov), or a
 per-test lcov, `add` also builds the per-test *test-to-code map*, which test
-covers which source lines. A report without contexts still ingests the
+covers which source lines. A text report without contexts still ingests the
 per-file coverage; it just skips the map.
 
 ```bash
@@ -1434,7 +1436,7 @@ repowise coverage add 'artifacts/**/lcov.info'   # every shard's report
 repowise coverage add web/coverage/lcov.info=web # report paths are relative to web/
 repowise coverage add --verbose             # show ingestion debug logs
 pytest --cov=<package> --cov-context=test   # produce .coverage with contexts (needs pytest-cov)
-repowise coverage add .coverage             # per-file coverage + per-test map
+repowise coverage add .coverage             # per-test map
 repowise coverage status                    # coverage summary + "Test-to-code map" counts
 repowise coverage status --format json      # machine-readable (note: the --format on `coverage add` names the input parser instead)
 ```

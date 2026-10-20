@@ -10,6 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from repowise.core.pipeline.phases.analysis import _build_pipeline_coverage
 
 
@@ -93,3 +95,23 @@ def test_strip_prefix_from_config(tmp_path: Path) -> None:
     )
     assert "web/index.ts" in coverage_map
     assert "api/index.ts" not in coverage_map
+
+
+def test_dot_coverage_says_why_it_has_no_per_file_coverage(tmp_path: Path) -> None:
+    from repowise.core.analysis.health.coverage.contexts import COVERAGE_DATA_FILE_NOTE
+
+    coverage = pytest.importorskip("coverage")
+    db = tmp_path / ".coverage"
+    data = coverage.CoverageData(basename=str(db))
+    data.add_lines({str(tmp_path / "src" / "a.py"): [1, 2]})
+    data.write()
+    messages: list[tuple[str, str]] = []
+    progress = SimpleNamespace(on_message=lambda level, msg: messages.append((level, msg)))
+
+    coverage_map, files, _fmt, _provenance = _build_pipeline_coverage(
+        tmp_path, [_parsed("src/a.py")], [db], progress=progress
+    )
+
+    assert coverage_map == {}
+    assert files == []
+    assert ("warning", f"  ↳ coverage .coverage: {COVERAGE_DATA_FILE_NOTE}") in messages

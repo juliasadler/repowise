@@ -34,6 +34,7 @@ import pathspec
 
 from repowise.core.fs_walk import PRUNED_DIRS, WalkSnapshot, iter_glob
 
+from .contexts import COVERAGE_DATA_FILE_NOTE, is_coverage_data_file
 from .detector import parse as parse_coverage
 from .model import (
     ContextCoverageReport,
@@ -1140,14 +1141,15 @@ def build_coverage_map(
     parsed: list[CoverageReport] = []
     errors: list[tuple[Path, str]] = []
     for path in report_paths:
+        if is_coverage_data_file(path):
+            errors.append((path, COVERAGE_DATA_FILE_NOTE))
+            continue
         try:
             text = path.read_text(encoding="utf-8")
         except OSError as exc:
             errors.append((path, f"could not read: {exc}"))
             continue
         except UnicodeDecodeError:
-            # A binary artifact, most often a coverage.py ``.coverage`` database:
-            # export it with ``coverage lcov`` or ``coverage xml`` first.
             errors.append((path, "not a text coverage report"))
             continue
         report = parse_coverage(text, format=coverage_format)

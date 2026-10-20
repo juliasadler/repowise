@@ -351,3 +351,52 @@ def test_init_and_update_keep_the_repo_hook_in_step(
     update_command._refresh_editor_stamp(tmp_path, None)
     assert calls == [tmp_path]
     assert "sync_repo_hook(repo_path, console)" in inspect.getsource(init_finish._write_editor_files)
+
+
+def _coverage_data(path, context: str | None, source) -> None:
+    """A real coverage.py ``.coverage`` with lines 1-2 of *source* run under *context*."""
+    coverage = pytest.importorskip("coverage")
+    data = coverage.CoverageData(basename=str(path))
+    if context:
+        data.set_context(context)
+    data.add_lines({str(source): [1, 2]})
+    data.write()
+
+
+def test_coverage_add_dot_coverage_builds_the_map_and_says_why_no_per_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    stored = _fake_ingest(monkeypatch, tmp_path, {"src/a.py"})
+    mapped: list = []
+
+    async def _save_map(session, repository_id, records, **kwargs):
+        mapped.extend(records)
+        return len(records)
+
+    monkeypatch.setattr("repowise.core.persistence.crud.save_test_coverage", _save_map)
+    _coverage_data(tmp_path / ".coverage", "tests/test_a.py::test_one|run", tmp_path / "src" / "a.py")
+
+    result = CliRunner().invoke(cli, ["coverage", "add", ".coverage"])
+
+    assert result.exit_code == 0, result.output
+    # No executable-line set in the file, so no per-file row; the map is built.
+    assert stored == []
+    assert [(r.file_path, r.covered_lines) for r in mapped] == [("src/a.py", [1, 2])]
+    assert "coverage lcov" in " ".join(result.output.split())
+
+
+def test_coverage_add_dot_coverage_without_contexts_stores_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    stored = _fake_ingest(monkeypatch, tmp_path, {"src/a.py"})
+    _coverage_data(tmp_path / ".coverage", None, tmp_path / "src" / "a.py")
+
+    result = CliRunner().invoke(cli, ["coverage", "add", ".coverage"])
+
+    output = " ".join(result.output.split())
+    assert result.exit_code == 1, result.output
+    assert stored == []
+    assert "coverage lcov" in output
+    assert "Nothing was stored." in output
+    # The paths were never the problem, so no prefix advice.
+    assert "strip_prefix" not in output
