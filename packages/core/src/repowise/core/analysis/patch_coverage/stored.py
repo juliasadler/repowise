@@ -10,13 +10,13 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..git_cli import _git, run_git, untracked_paths
+from ..git_cli import _git, untracked_paths
 from ..health.coverage.discovery import CoverageScope
 from ..health.coverage.freshness import (
     FreshnessStatus,
@@ -135,40 +135,38 @@ async def file_on_disk_freshness(
     """
     if not repo_path or not measured_commit:
         return "unknown"
-    return await asyncio.to_thread(_file_freshness, repo_path, measured_commit, file_path)
-
-
-def _file_freshness(repo_path: str, since: str, file_path: str) -> FreshnessStatus:
-    # Scoped to the one path, so the cost does not grow with the repo, and
-    # relative to *repo_path* even when it sits below the git top level.
-    spec = ["--", f":(literal){file_path}"]
-    try:
-        diff = run_git(["diff", "--quiet", "--no-renames", since, *spec], repo_path)
-        if diff.returncode == 1:
-            return "stale"
-        if diff.returncode != 0:
-            return "unknown"
-        untracked = run_git(["ls-files", "--others", "--exclude-standard", *spec], repo_path)
-    except (subprocess.SubprocessError, OSError):
+    since = await asyncio.to_thread(
+        _changed_since, repo_path, measured_commit, None, (file_path,)
+    )
+    if since is None:
         return "unknown"
-    if untracked.returncode != 0:
-        return "unknown"
-    return "stale" if untracked.stdout.strip() else "current"
+    return "stale" if file_path in since else "current"
 
 
-def _changed_since(repo_path: str, since: str, until: str | None) -> set[str] | None:
+def _changed_since(
+    repo_path: str, since: str, until: str | None, paths: Sequence[str] = ()
+) -> set[str] | None:
     """Files that differ between *since* and *until* (the working tree when ``None``).
 
-    ``None`` when git cannot tell. Two dots: any content difference moves the
-    report's line numbers, whichever side made it.
+    Relative to *repo_path*, like the stored coverage rows, even when it sits
+    below the git top level; limited to *paths* when given, so one file costs
+    one file. ``None`` when git cannot tell. Two dots: any content difference
+    moves the report's line numbers, whichever side made it.
     """
     tail = [until] if until else []
+    spec = [f":(literal){p}" for p in paths]
     try:
-        listing = _git(["diff", "--name-only", "-z", "--no-renames", since, *tail], repo_path)
+        prefix = _git(["rev-parse", "--show-prefix"], repo_path).strip()
+        listing = _git(
+            ["diff", "--name-only", "-z", "--no-renames", since, *tail, "--", *spec], repo_path
+        )
     except (subprocess.SubprocessError, OSError):
         return None
-    paths = {p for p in listing.split("\0") if p}
-    return paths | set(untracked_paths(repo_path)) if until is None else paths
+    # git names paths from its top level; the prefix is where *repo_path* sits.
+    changed = {p for p in listing.split("\0") if p}
+    if until is None:
+        changed |= set(untracked_paths(repo_path, pathspecs=spec or (":/",)))
+    return {p[len(prefix) :] for p in changed if p.startswith(prefix)}
 
 
 async def _stored_branch_data(
