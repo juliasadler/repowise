@@ -641,6 +641,7 @@ def _summarize(tmp_path: Path, bin_dir: Path, **env: str) -> tuple[str, list[str
         "FAKE_LOG": str(log),
         "EXIT_CODES": "coverage= doc-drift=0 security=1 health= risk=",
         "SUMMARY_DIR": str(tmp_path / "rows"),
+        "WORKING_DIRECTORY": ".",
         "COMMENT": "false",
         **env,
     }
@@ -688,6 +689,9 @@ def test_the_first_run_posts_the_comment(tmp_path, fake_tools) -> None:
     _, calls, _ = _summarize(tmp_path, fake_tools, COMMENT="true", EVENT=_PR)
     search, summary, post = calls
     assert search.startswith("gh api --paginate repos/o/r/issues/7/comments --jq")
+    # Only a bot's comment counts; anyone can post one that starts with the marker.
+    assert '.user.type == "Bot"' in search
+    assert 'startswith("<!-- repowise-ci-summary -->")' in search
     assert "--comment-file" in summary and "--previous" not in summary
     assert post.startswith("gh api --method POST repos/o/r/issues/7/comments -F body=@")
 
@@ -698,6 +702,25 @@ def test_a_later_run_edits_the_comment_in_place(tmp_path, fake_tools) -> None:
     assert previous == "gh api repos/o/r/issues/comments/42 --jq .body"
     assert "--previous" in summary
     assert edit.startswith("gh api --method PATCH repos/o/r/issues/comments/42 -F body=@")
+
+
+def test_a_comment_that_cannot_be_edited_is_replaced(tmp_path, fake_tools) -> None:
+    _, calls, _ = _summarize(
+        tmp_path, fake_tools, COMMENT="true", EVENT=_PR, FAKE_GH_ID="42", FAKE_GH="1"
+    )
+    assert calls[-2].startswith("gh api --method PATCH repos/o/r/issues/comments/42")
+    assert calls[-1].startswith("gh api --method POST repos/o/r/issues/7/comments")
+
+
+def test_each_working_directory_keeps_its_own_comment(tmp_path, fake_tools) -> None:
+    from repowise.core.ci.summary import comment_marker
+
+    _, calls, _ = _summarize(
+        tmp_path, fake_tools, COMMENT="true", EVENT=_PR, WORKING_DIRECTORY="apps/my web"
+    )
+    search, summary, _ = calls
+    assert f'startswith("{comment_marker("apps/my web")}")' in search
+    assert summary.endswith("--comment-key apps/my_web") or "--comment-key apps/my_web " in summary
 
 
 def test_a_read_only_token_warns_and_keeps_the_verdict(tmp_path, fake_tools) -> None:

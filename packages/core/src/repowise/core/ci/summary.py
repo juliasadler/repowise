@@ -23,13 +23,22 @@ from .markdown import ROW_LIMIT, cell, code, more_line, plural
 PASS, WARN, FAIL = "pass", "warn", "fail"
 #: The gate could not run (exit code 2); the combined verdict counts it as a fail.
 ERROR = "error"
-VERDICTS = (PASS, WARN, FAIL, ERROR)
+#: The gate exited 0 but left no result to read; the combined verdict counts it as a warning.
+NO_RESULT = "no_result"
+VERDICTS = (PASS, WARN, FAIL, ERROR, NO_RESULT)
+#: Verdicts of a gate that judged nothing this run.
+_NOT_JUDGED = frozenset({ERROR, NO_RESULT})
 
 #: Finding levels, as SARIF names them.
 LEVELS = ("error", "warning", "note")
 
 #: Opens the sticky comment; a run finds its earlier comment by it.
 COMMENT_MARKER = "<!-- repowise-ci-summary -->"
+#: Kept out of a comment key, so a shell can derive the same key with ``tr``.
+_KEY_UNSAFE = re.compile(r"[^A-Za-z0-9_./]")
+#: Longest message or headline shown. With :data:`ROW_LIMIT` rows per gate this
+#: keeps a comment far under GitHub's 65,536 characters.
+MESSAGE_LIMIT = 300
 _FINGERPRINT_TAG = "repowise-fingerprint:v1:"
 _FINGERPRINT_RE = re.compile(r"<!-- " + re.escape(_FINGERPRINT_TAG) + r"([A-Za-z0-9_.:-]+) -->")
 #: Kept out of a marker: anything that could end the HTML comment early.
@@ -42,7 +51,13 @@ _TITLES = {
     "health": "Health",
     "risk": "Change risk",
 }
-_VERDICT_WORDS = {PASS: "Pass", WARN: "Warn", FAIL: "Fail", ERROR: "Could not evaluate"}
+_VERDICT_WORDS = {
+    PASS: "Pass",
+    WARN: "Warn",
+    FAIL: "Fail",
+    ERROR: "Could not evaluate",
+    NO_RESULT: "Could not evaluate",
+}
 
 
 @dataclass(frozen=True)
@@ -113,25 +128,37 @@ def with_exit_code(summary: GateSummary | None, gate: str, exit_code: int) -> Ga
 
     A gate that exits 1 failed even when its own result reads as a pass (a check
     layered on top, such as a grown baseline); exit 2, or no summary at all,
-    means it could not be evaluated.
+    means it could not be evaluated. A gate that exits 0 with no summary (an
+    older release) reads as not evaluated too, but warns rather than fails.
     """
+    if exit_code == 0 and summary is None:
+        return GateSummary(gate, NO_RESULT, "Exited 0 but left no result to read.")
     if exit_code not in (0, 1) or summary is None:
         headline = summary.headline if summary else "See the job log for why."
         findings = summary.findings if summary else ()
         return GateSummary(gate, ERROR, headline, findings)
     if exit_code == 1 and summary.verdict != FAIL:
-        return GateSummary(gate, FAIL, summary.headline, summary.findings)
-    if exit_code == 0 and summary.verdict in (FAIL, ERROR):
+        headline = f"{summary.headline} The gate exited 1; see the job log for why.".lstrip()
+        return GateSummary(gate, FAIL, headline, summary.findings)
+    if exit_code == 0 and summary.verdict in (FAIL, *_NOT_JUDGED):
         return GateSummary(gate, WARN, summary.headline, summary.findings)
     return summary
 
 
 def combined_verdict(gates: Iterable[GateSummary]) -> str:
-    """``fail`` when any gate failed or could not run, else ``warn`` on any warning, else ``pass``."""
+    """``fail`` when any gate failed or could not run, else ``warn`` on any warning
+    or a gate that left no result, else ``pass``."""
     verdicts = {g.verdict for g in gates}
     if verdicts & {FAIL, ERROR}:
         return FAIL
-    return WARN if WARN in verdicts else PASS
+    return WARN if verdicts & {WARN, NO_RESULT} else PASS
+
+
+def comment_marker(key: str = "") -> str:
+    """The marker opening the comment; *key* (a working directory) keeps two
+    uses of the Action on one pull request apart."""
+    key = _KEY_UNSAFE.sub("_", key)
+    return f"<!-- repowise-ci-summary:{key} -->" if key else COMMENT_MARKER
 
 
 def fingerprint_marker(gate: str, fingerprint: str) -> str:
@@ -153,20 +180,26 @@ def fingerprints_in(body: str) -> frozenset[str]:
     return frozenset(_FINGERPRINT_RE.findall(body or ""))
 
 
-def render_comment(gates: Sequence[GateSummary], *, previous: str | None = None) -> str:
-    """The sticky comment: the marker, the verdict table, then each gate's findings.
+def render_comment(
+    gates: Sequence[GateSummary], *, previous: str | None = None, key: str = ""
+) -> str:
+    """The sticky comment: its marker (:func:`comment_marker`), the verdict
+    table, then each gate's findings.
 
     Each gate lists its first :data:`~.markdown.ROW_LIMIT` findings, errors
     first. With *previous* (the comment this replaces), findings it listed
-    that no gate reports any more are counted as resolved.
+    that a gate judged this run no longer reports are counted as resolved; a
+    gate that judged nothing resolves nothing.
     """
-    lines = [COMMENT_MARKER, *_table(gates)]
+    lines = [comment_marker(key), *_table(gates)]
     for g in gates:
         if g.findings:
             lines += ["", f"#### {cell(_title(g.gate))}", *_finding_lines(g)]
     if previous is not None:
+        judged = {_safe(g.gate) for g in gates if g.verdict not in _NOT_JUDGED}
         current = {marker_key(g.gate, f.fingerprint) for g in gates for f in g.findings}
-        resolved = len(fingerprints_in(previous) - current)
+        earlier = {k for k in fingerprints_in(previous) if k.split(":", 1)[0] in judged}
+        resolved = len(earlier - current)
         if resolved:
             lines += ["", f"Resolved since the last run: {plural(resolved, 'finding')}."]
     return "\n".join(lines) + "\n"
@@ -184,7 +217,7 @@ def _table(gates: Sequence[GateSummary]) -> list[str]:
         return [*lines, "No gate ran."]
     lines += ["| Gate | Result | Summary |", "| --- | --- | --- |"]
     lines += [
-        f"| {cell(_title(g.gate))} | {_VERDICT_WORDS[g.verdict]} | {cell(g.headline)} |"
+        f"| {cell(_title(g.gate))} | {_VERDICT_WORDS[g.verdict]} | {_text(g.headline)} |"
         for g in gates
     ]
     return lines
@@ -198,13 +231,25 @@ def _finding_lines(g: GateSummary) -> list[str]:
         g.findings, key=lambda f: (_LEVEL_ORDER.get(f.level, len(LEVELS)), f.path, f.line or 0)
     )
     out = [
-        f"- {f.level} {code(f'{f.path}:{f.line}' if f.line else f.path)} {cell(f.message)} "
+        f"- {f.level} {code(f'{f.path}:{f.line}' if f.line else f.path)} {_text(f.message)} "
         f"{fingerprint_marker(g.gate, f.fingerprint)}"
         for f in ordered[:ROW_LIMIT]
     ]
     if rest := more_line(len(ordered) - ROW_LIMIT, "findings"):
         out.append(f"- {rest[0].upper()}{rest[1:]} See the job summary.")
     return out
+
+
+def _text(text: str) -> str:
+    """*text* from the change itself made inert: one line, capped, escaped, no mentions.
+
+    A zero-width space after ``@`` stops a team or user mention, and after ``[``
+    a link or an image.
+    """
+    text = " ".join(text.split())
+    if len(text) > MESSAGE_LIMIT:
+        text = text[: MESSAGE_LIMIT - 1].rstrip() + "\u2026"
+    return cell(text).replace("@", "@\u200b").replace("[", "[\u200b")
 
 
 def _title(gate: str) -> str:

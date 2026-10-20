@@ -7,8 +7,11 @@
 
 set -u
 
-marker="<!-- repowise-ci-summary -->"
 work=$(mktemp -d)
+# gh is a native binary on Windows runners and does not read MSYS paths.
+if command -v cygpath >/dev/null; then
+  work=$(cygpath -m "$work")
+fi
 trap 'rm -rf "$work" "$SUMMARY_DIR"' EXIT
 
 # EXIT_CODES lists every gate as name=code; a gate that did not run has no code.
@@ -18,6 +21,15 @@ for pair in $EXIT_CODES; do
 done
 ((${#gates[@]})) || exit 0
 args=("$SUMMARY_DIR" "${gates[@]}")
+
+# One comment per working directory, so two uses of the action on one pull
+# request keep their own. The key matches comment_marker in core/ci/summary.py.
+key=""
+if [[ -n "$WORKING_DIRECTORY" && "$WORKING_DIRECTORY" != "." ]]; then
+  key=$(printf '%s' "$WORKING_DIRECTORY" | tr -c 'A-Za-z0-9_./' '_')
+  args+=(--comment-key "$key")
+fi
+marker="<!-- repowise-ci-summary${key:+:$key} -->"
 
 pr=""
 comment_id=""
@@ -31,8 +43,10 @@ print((event.get("pull_request") or {}).get("number") or "")' 2>/dev/null)
     echo "::warning::The GitHub CLI (gh) is not installed, so no summary comment is posted."
     pr=""
   else
+    # Only a bot's comment: anyone can post one that starts with the marker.
     comment_id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$pr/comments" \
-      --jq ".[] | select(.body | startswith(\"$marker\")) | .id" 2>/dev/null | head -n 1)
+      --jq ".[] | select(.user.type == \"Bot\" and (.body | startswith(\"$marker\"))) | .id" \
+      2>/dev/null | head -n 1)
     if [[ -n "$comment_id" ]] && gh api "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id" \
       --jq .body >"$work/previous.md" 2>/dev/null; then
       args+=(--previous "$work/previous.md")
@@ -48,13 +62,13 @@ fi
 echo "verdict=$verdict" >>"$GITHUB_OUTPUT"
 
 if [[ -n "$pr" && -s "$work/comment.md" ]]; then
-  if [[ -n "$comment_id" ]]; then
-    endpoint=(--method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id")
-  else
-    endpoint=(--method POST "repos/$GITHUB_REPOSITORY/issues/$pr/comments")
+  body=(-F "body=@$work/comment.md")
+  # A comment that cannot be edited (deleted, or another bot's) is replaced by a new one.
+  if [[ -z "$comment_id" ]] ||
+    ! gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id" "${body[@]}" >/dev/null; then
+    # A pull request from a fork gets a read-only token; the gates still decide.
+    gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$pr/comments" "${body[@]}" >/dev/null ||
+      echo "::warning::Could not post the summary comment. It needs the pull-requests write permission, which a fork's token lacks."
   fi
-  # A pull request from a fork gets a read-only token; the gates still decide.
-  gh api "${endpoint[@]}" -F "body=@$work/comment.md" >/dev/null ||
-    echo "::warning::Could not post the summary comment. It needs the pull-requests write permission, which a fork's token lacks."
 fi
 exit 0

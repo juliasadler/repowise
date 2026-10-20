@@ -20,12 +20,9 @@ from repowise.cli.ci import append_step_summary
 
 def _gate_exit(value: str) -> tuple[str, int]:
     name, _, code = value.partition("=")
-    try:
-        if name:
-            return name, int(code)
-    except ValueError:
-        pass
-    raise click.UsageError(f"--gate expects NAME=EXIT_CODE, got {value!r}")
+    if not name or not code.isdigit():
+        raise click.UsageError(f"--gate expects NAME=EXIT_CODE, got {value!r}")
+    return name, int(code)
 
 
 def _read(directory: Path, gate: str):
@@ -62,8 +59,18 @@ def _read(directory: Path, gate: str):
     default=None,
     help="Write the pull-request comment here.",
 )
+@click.option(
+    "--comment-key",
+    default="",
+    help="Tells this comment apart from another run's on the same pull request "
+    "(the Action passes its working directory).",
+)
 def ci_summary_command(
-    summary_dir: Path, gates: tuple[str, ...], previous: Path | None, comment_file: Path | None
+    summary_dir: Path,
+    gates: tuple[str, ...],
+    previous: Path | None,
+    comment_file: Path | None,
+    comment_key: str,
 ) -> None:
     """Combine the gates' results: job-summary table, PR comment, verdict on stdout."""
     from repowise.core.ci.summary import (
@@ -83,5 +90,6 @@ def ci_summary_command(
                 earlier = previous.read_text(encoding="utf-8")
             except OSError:
                 earlier = None
-        comment_file.write_text(render_comment(rows, previous=earlier), encoding="utf-8")
+        body = render_comment(rows, previous=earlier, key=comment_key)
+        comment_file.write_text(body, encoding="utf-8")
     click.echo(combined_verdict(rows))

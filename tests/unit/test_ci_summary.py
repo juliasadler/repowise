@@ -18,9 +18,11 @@ from repowise.core.analysis.patch_coverage import gate_summary as coverage_summa
 from repowise.core.ci.markdown import ROW_LIMIT
 from repowise.core.ci.summary import (
     COMMENT_MARKER,
+    MESSAGE_LIMIT,
     GateSummary,
     SummaryFinding,
     combined_verdict,
+    comment_marker,
     fingerprint_marker,
     fingerprints_in,
     render_comment,
@@ -53,8 +55,20 @@ def test_the_exit_code_decides_fail_and_could_not_evaluate() -> None:
     # A check layered on the gate (a grown baseline) fails it without a failing finding.
     assert with_exit_code(passing, "security", 1).verdict == "fail"
     assert with_exit_code(passing, "security", 2).verdict == "error"
-    missing = with_exit_code(None, "health", 0)
-    assert (missing.gate, missing.verdict) == ("health", "error")
+    crashed = with_exit_code(None, "health", 1)
+    assert (crashed.gate, crashed.verdict) == ("health", "error")
+
+
+def test_an_overridden_pass_says_the_exit_code_failed_it() -> None:
+    row = with_exit_code(GateSummary("security", "pass", "No new finding."), "security", 1)
+    assert row.headline == "No new finding. The gate exited 1; see the job log for why."
+
+
+def test_a_gate_that_exits_0_with_no_result_warns_rather_than_fails() -> None:
+    row = with_exit_code(None, "health", 0)
+    assert (row.gate, row.verdict) == ("health", "no_result")
+    assert combined_verdict([row, GateSummary("security", "pass", "")]) == "warn"
+    assert "| Health | Could not evaluate |" in render_job_summary([row])
 
 
 def test_comment_lists_findings_with_a_fingerprint_marker_each() -> None:
@@ -93,6 +107,49 @@ def test_comment_counts_findings_resolved_since_the_previous_one() -> None:
         [GateSummary("health", "fail", "x", (_finding("kept"),))], previous=after
     )
     assert "Resolved" not in again
+
+
+def test_a_gate_that_judged_nothing_resolves_nothing() -> None:
+    before = render_comment(
+        [
+            GateSummary("health", "fail", "x", (_finding("h1"),)),
+            GateSummary("security", "fail", "x", (_finding("s1"),)),
+        ]
+    )
+    after = render_comment(
+        [
+            GateSummary("health", "error", "crashed"),
+            with_exit_code(None, "security", 0),
+        ],
+        previous=before,
+    )
+    assert "Resolved" not in after
+
+
+def test_untrusted_text_stays_one_inert_line() -> None:
+    message = "Line one\nline two @org/team see [x](https://e.test) ![i](https://e.test/i.png)"
+    finding = SummaryFinding("error", "d.md", 1, message, "f")
+    body = render_comment([GateSummary("doc-drift", "fail", "@someone", (finding,))])
+    (line,) = [x for x in body.splitlines() if "Line one" in x]
+    assert "line two" in line
+    assert "@org" not in line and "@\u200borg" in line
+    assert "[x]" not in line and "![i]" not in line
+    assert "@someone" not in body
+
+
+def test_a_long_message_is_capped() -> None:
+    short = GateSummary("health", "fail", "x", (_finding(),))
+    huge = SummaryFinding("error", "a.py", 1, "y" * 5000, "f")
+    long = GateSummary("health", "fail", "x", (huge,))
+    assert len(render_comment([long])) < len(render_comment([short])) + MESSAGE_LIMIT + 50
+
+
+def test_each_working_directory_keeps_its_own_comment() -> None:
+    assert comment_marker() == COMMENT_MARKER == comment_marker("")
+    assert comment_marker("apps/web") == "<!-- repowise-ci-summary:apps/web -->"
+    assert comment_marker("a b-->") == "<!-- repowise-ci-summary:a_b___ -->"
+    body = render_comment([GateSummary("health", "pass", "")], key="apps/web")
+    assert body.startswith("<!-- repowise-ci-summary:apps/web -->\n")
 
 
 def test_a_marker_never_closes_its_html_comment_early() -> None:
@@ -146,6 +203,9 @@ def test_security_row_warns_below_the_threshold_and_skips_the_baseline() -> None
     row = security_gate.gate_summary([low], gate)
     assert row.verdict == "warn" and [f.level for f in row.findings] == ["warning"]
 
+    failed = security_gate.GateResult(passed=False, fail_on="high")
+    assert security_gate.gate_summary([], failed).headline == "Failed; see the job log for why."
+
     gate = security_gate.evaluate([high, low], fail_on="high")
     row = security_gate.gate_summary([high, low], gate)
     assert row.verdict == "fail" and row.headline == "1 new finding at high or above."
@@ -180,11 +240,12 @@ def test_coverage_row_names_each_file_with_uncovered_changes_by_path() -> None:
     row = coverage_summary(pc)
     assert row.verdict == "fail"
     (f,) = row.findings
-    assert (f.path, f.line) == ("src/a.py", None)
+    assert (f.level, f.path, f.line) == ("error", "src/a.py", None)
     assert "2 changed lines not covered" in f.message
     other = compute_patch_coverage({"src/a.py": {2}}, coverage)
     assert coverage_summary(other).findings[0].fingerprint == f.fingerprint
     assert coverage_summary(other).verdict == "pass"
+    assert coverage_summary(other).findings[0].level == "warning"
 
 
 # -- the CLI side -------------------------------------------------------------

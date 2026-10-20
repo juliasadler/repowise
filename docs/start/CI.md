@@ -147,7 +147,8 @@ release the action installs.
 Outputs: `coverage`, `doc-drift`, `security`, `health` and `risk` hold each gate's exit
 code (empty when not run), `verdict` combines them (`fail` when any gate failed
 or could not evaluate, `warn` when any passed with warnings, else `pass`), and
-`sarif-dir` holds the SARIF directory.
+`sarif-dir` holds the SARIF directory. A gate that exits 0 without leaving a
+result, as an older Repowise does, reads as could not evaluate and counts as `warn`.
 `impacted-tests` holds the runner arguments (or `:all`), and `run-all-tests` is
 `false` only when that subset is safe to run alone.
 
@@ -171,7 +172,8 @@ there with a warning; the gates still run and still decide the check.
 **Summary comment.** The job summary ends with a table of every gate and its
 result. With `comment: true` the same table, plus each gate's findings,
 goes into one pull-request comment that later runs edit rather than repeat; the
-job needs `pull-requests: write`. Each finding carries a hidden
+job needs `pull-requests: write`. Each working directory keeps its own comment.
+Each finding carries a hidden
 `repowise-fingerprint:v1` marker with its line-free id, so the comment counts
 what a push resolved.
 

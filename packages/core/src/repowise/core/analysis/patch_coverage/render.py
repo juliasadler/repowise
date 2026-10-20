@@ -627,13 +627,16 @@ def _outside_annotation(c: IndirectChange) -> str:
 
 
 def gate_summary(pc: PatchCoverage) -> GateSummary:
-    """The gate's row in the combined CI summary: one warning per file with uncovered changes.
+    """The gate's row in the combined CI summary: one finding per file with uncovered
+    changes, an error when the gate failed and a warning otherwise.
 
     A coverage gap is a file's, not a line's, so its fingerprint is the path's.
     """
+    verdict = FAIL if pc.gate == "fail" else PASS
+    level = "error" if verdict == FAIL else "warning"
     rows = tuple(
         SummaryFinding(
-            "warning",
+            level,
             f.file_path,
             None,
             f"{plural(f.uncovered_line_count, 'changed line')} not covered: "
@@ -643,7 +646,6 @@ def gate_summary(pc: PatchCoverage) -> GateSummary:
         for f in attention_rows(pc)
         if f.status == "measured" and f.uncovered_line_count
     )
-    verdict = FAIL if pc.gate == "fail" else PASS
     return GateSummary("coverage", verdict, headline(pc, markdown=False), rows)
 
 

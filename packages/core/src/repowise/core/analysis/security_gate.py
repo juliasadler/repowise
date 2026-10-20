@@ -942,7 +942,12 @@ def gate_summary(findings: Sequence[Mapping[str, Any]], gate: GateResult) -> Gat
     below = sum(r.level == "warning" for r in rows)
     if not gate.passed:
         at = len(rows) - below
-        verdict, headline = FAIL, f"{plural(at, 'new finding')} at {gate.fail_on} or above."
+        headline = (
+            f"{plural(at, 'new finding')} at {gate.fail_on} or above."
+            if at
+            else "Failed; see the job log for why."
+        )
+        verdict = FAIL
     elif below:
         verdict, headline = WARN, f"{plural(below, 'new finding')} below {gate.fail_on}."
     else:

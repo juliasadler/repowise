@@ -145,7 +145,8 @@ outputs:
   verdict:
     description: >-
       All gates combined: "fail" when any gate failed or could not evaluate,
-      "warn" when any passed with warnings, else "pass". Empty when no gate ran.
+      "warn" when any passed with warnings or exited 0 without a result (an
+      older Repowise), else "pass". Empty when no gate ran.
     value: ${{ steps.summary.outputs.verdict }}
   sarif-dir:
     description: Directory holding the SARIF files, when upload-sarif is on.
@@ -224,6 +225,7 @@ runs:
           health=${{ steps.gates.outputs.health }}
           risk=${{ steps.gates.outputs.risk }}
         SUMMARY_DIR: ${{ runner.temp }}/repowise-gates
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
         COMMENT: ${{ inputs.comment }}
         GH_TOKEN: ${{ inputs.github-token }}
         PYTHONUTF8: "1"
