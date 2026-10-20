@@ -148,7 +148,8 @@ over data already in the database.
 from __future__ import annotations
 
 import json
-from collections.abc import Collection, Mapping
+import sys
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Literal, NamedTuple, TypeAlias
@@ -211,7 +212,7 @@ __all__ = [
     "imported_names_by_test",
     "load_import_graph",
     "load_test_files",
-    "rank_tests",
+    "rank_reaching",
     "reach_into_symbols",
     "tests_matching_by_name",
     "tests_reaching",
@@ -238,8 +239,7 @@ class ReachedBy:
     ``total`` is how many the walk actually found, before
     ``MAX_TESTS_PER_TARGET`` trimmed ``tests``. A surface that prints
     ``len(tests)`` as the answer is stating a cap as a measurement. The cut keeps
-    the test named for the target and its directory neighbours first
-    (:func:`rank_tests`). Carry the total and say the bound.
+    the closest tests (:func:`rank_reaching`). Carry the total and say the bound.
     """
 
     tests: list[str]
@@ -517,7 +517,7 @@ async def tests_reaching_through_helpers(
                 reached.setdefault(target, set()).update(tests)
     out: dict[str, ReachedBy] = {}
     for target, tests in reached.items():
-        ordered = tuple(rank_tests(target, tests))
+        ordered = tuple(rank_reaching(target, tests, changed=targets))
         out[target] = ReachedBy(
             list(ordered[:MAX_TESTS_PER_TARGET]), "import-graph", len(ordered), ordered
         )
@@ -699,12 +699,13 @@ async def tests_reaching_by_tier(
         return {}
 
     out: dict[str, ReachedBy] = {}
+    # The targets are usually a change's files; a test among them leads every list.
     if call_depth >= 1:
         found = await _call_reaching(
             session, repo_id, seeds, test_files, call_depth, symbol_seeds=symbol_seeds, avoid=avoid
         )
         for seed, reach in found.items():
-            ordered = tuple(rank_tests(seed.split("::", 1)[0], reach))
+            ordered = tuple(rank_reaching(seed, reach, reach=reach, changed=seeds))
             out[seed] = ReachedBy(
                 list(ordered[:MAX_TESTS_PER_TARGET]), "call-graph", len(ordered), ordered, reach
             )
@@ -715,7 +716,10 @@ async def tests_reaching_by_tier(
             session, repo_id, unanswered, test_files, import_depth, import_graph
         )
         for seed, tests in found.items():
-            ordered = tuple(rank_tests(seed.split("::", 1)[0], tests))
+            # A test importing the target itself, not a file on the way to it.
+            file = seed.split("::", 1)[0]
+            direct = {t for t, via in entries[seed].items() if file in via}
+            ordered = tuple(rank_reaching(seed, tests, direct=direct, changed=seeds))
             out[seed] = ReachedBy(
                 list(ordered[:MAX_TESTS_PER_TARGET]),
                 "import-graph",
@@ -1206,15 +1210,41 @@ async def _edges_into(
     return out
 
 
-def rank_tests(target: str, tests: Collection[str]) -> list[str]:
-    """*tests* with the one named for *target* first, then by how much of its directory
-    path each mirrors, so a capped list keeps the test most likely to exercise it."""
-    names = paired_test_names(target)
-    dirs = set(target.split("/")[:-1])
+def rank_reaching(
+    target: str,
+    tests: Iterable[str],
+    *,
+    reach: Mapping[str, ReachDistance] | None = None,
+    direct: Collection[str] = frozenset(),
+    changed: Collection[str] = frozenset(),
+) -> list[str]:
+    """*tests* reaching *target*, the likeliest to exercise it first. Cap after this.
 
-    def key(test: str) -> tuple[bool, int, str]:
+    In turn: a test in *changed* (the change edits it), fewer call hops
+    (*reach*; a test without one sorts after every test with one), a test in
+    *direct* (it imports or calls *target* itself), more of the test's
+    functions at that distance, then by name: the test named for *target*,
+    the one mirroring more of its directories, and the path. Targets, tests
+    and *changed* may be ``path::name`` ids; every key reads the file part.
+    """
+    path_of = target.split("::", 1)[0]
+    names = paired_test_names(path_of)
+    dirs = set(path_of.split("/")[:-1])
+    reach = reach or {}
+    edited = {c.split("::", 1)[0] for c in changed}
+
+    def key(test: str) -> tuple[bool, int, bool, int, bool, int, str]:
         path = test.split("::", 1)[0]
-        return path.rsplit("/", 1)[-1] not in names, -len(dirs & set(path.split("/")[:-1])), test
+        distance = reach.get(test) or reach.get(path)
+        return (
+            path not in edited,
+            distance.hops if distance else sys.maxsize,
+            test not in direct and path not in direct,
+            -distance.callers if distance else 0,
+            path.rsplit("/", 1)[-1] not in names,
+            -len(dirs & set(path.split("/")[:-1])),
+            test,
+        )
 
     return sorted(tests, key=key)
 
@@ -1231,7 +1261,7 @@ def tests_matching_by_name(targets: list[str], test_files: Collection[str]) -> d
         by_name.setdefault(path.rsplit("/", 1)[-1], []).append(path)
     out: dict[str, ReachedBy] = {}
     for target in targets:
-        found = rank_tests(
+        found = rank_reaching(
             target, [path for name in paired_test_names(target) for path in by_name.get(name, ())]
         )
         if found:

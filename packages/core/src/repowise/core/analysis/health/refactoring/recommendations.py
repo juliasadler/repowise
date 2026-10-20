@@ -35,7 +35,7 @@ from repowise.core.analysis.test_reachability import (
     MAX_TESTS_PER_TARGET,
     ReachDistance,
     ReachedBy,
-    rank_tests,
+    rank_reaching,
 )
 from repowise.core.code_origin import ship_rank
 from repowise.core.test_paths import is_test_support_path, names_test_for, paired_test_names
@@ -1465,7 +1465,7 @@ def _expand_scopes(path: str, reached: ReachedBy, expanded: list[str]) -> Reache
     found = reached.all_tests or tuple(reached.tests)
     if tuple(expanded) == tuple(found):
         return reached
-    ranked = rank_tests(path, expanded)
+    ranked = rank_reaching(path, expanded, reach=reached.reach)
     return dataclasses.replace(
         reached,
         tests=ranked[:MAX_TESTS_PER_TARGET],

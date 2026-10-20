@@ -343,7 +343,7 @@ async def health_tests_reaching(
         "reached": True,
         "tests": reached.tests,
         "via": reached.via,
-        # The walk's own count, which ``tests`` may be a trimmed alphabetical
+        # The walk's own count, which ``tests`` may be a ranked, trimmed
         # slice of. Without it a caller renders the cap as the answer.
         "total": total,
         "truncated": total > len(reached.tests),

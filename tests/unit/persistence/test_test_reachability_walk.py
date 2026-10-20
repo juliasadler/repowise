@@ -808,3 +808,64 @@ async def test_a_node_listed_twice_across_batches_reads_its_edges_once(async_ses
     assert out == [("tests/test_a.py", "src/a.py")]
     names = await _imported_names(async_session, repo.id, ["src/a.py", *padding, "src/a.py"])
     assert names == [("tests/test_a.py", "src/a.py", frozenset())]
+
+
+async def test_the_capped_list_keeps_the_closest_tests_and_a_changed_test(
+    async_session, monkeypatch
+):
+    """Ranked before the cap: a direct caller survives many path-earlier far ones,
+    and a test that is itself a target leads."""
+    from repowise.core.analysis import test_reachability as tr
+
+    monkeypatch.setattr(tr, "MAX_TESTS_PER_TARGET", 2)
+    far = [f"tests/a/test_far_{i}.py" for i in range(3)]
+    edges = [
+        ("src/hub.py", "src/hub.py::run", "defines"),
+        ("src/mid.py", "src/mid.py::go", "defines"),
+        ("src/mid.py::go", "src/hub.py::run", "calls"),
+        *_calls("tests/z/test_direct.py", "src/hub.py"),
+    ]
+    for test in [*far, "tests/z/test_edited.py"]:
+        edges += [
+            (test, f"{test}::test_it", "defines"),
+            (f"{test}::test_it", "src/mid.py::go", "calls"),
+        ]
+    tests = [*far, "tests/z/test_direct.py", "tests/z/test_edited.py"]
+    repo = await insert_repo(async_session)
+    await _seed(
+        async_session,
+        repo.id,
+        nodes={**dict.fromkeys(tests, True), "src/hub.py": False, "src/mid.py": False},
+        edges=edges,
+    )
+    found = await by_tier(async_session, repo.id, ["src/hub.py"])
+    assert found["src/hub.py"].tests == ["tests/z/test_direct.py", far[0]]
+    assert found["src/hub.py"].total == 5
+
+    found = await by_tier(async_session, repo.id, ["src/hub.py", "tests/z/test_edited.py"])
+    assert found["src/hub.py"].tests == ["tests/z/test_edited.py", "tests/z/test_direct.py"]
+
+
+async def test_the_import_tier_keeps_a_direct_importer_before_the_cap(async_session, monkeypatch):
+    from repowise.core.analysis import test_reachability as tr
+
+    monkeypatch.setattr(tr, "MAX_TESTS_PER_TARGET", 1)
+    repo = await insert_repo(async_session)
+    await _seed(
+        async_session,
+        repo.id,
+        nodes={
+            "tests/a/test_via_facade.py": True,
+            "tests/z/test_direct.py": True,
+            "src/api.py": False,
+            "src/core.py": False,
+        },
+        edges=[
+            ("tests/a/test_via_facade.py", "src/api.py", "imports"),
+            ("src/api.py", "src/core.py", "imports"),
+            ("tests/z/test_direct.py", "src/core.py", "imports"),
+        ],
+    )
+    found = await by_tier(async_session, repo.id, ["src/core.py"], call_depth=0, import_depth=2)
+    assert found["src/core.py"].tests == ["tests/z/test_direct.py"]
+    assert found["src/core.py"].total == 2
