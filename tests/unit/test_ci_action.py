@@ -594,8 +594,9 @@ def fake_tools(tmp_path: Path) -> Path:
     """``repowise`` and ``gh`` stand-ins that log their arguments.
 
     ``repowise ci-summary`` prints ``$FAKE_VERDICT`` and exits ``$FAKE_SUMMARY``,
-    writing a body to ``--comment-file``; ``gh`` prints ``$FAKE_GH_ID`` for the
-    comment search and exits ``$FAKE_GH`` for a post.
+    writing a body to ``--comment-file``; ``gh`` prints ``$FAKE_GH_LOGIN`` as the
+    token's login (and fails without one, as the default token does), prints
+    ``$FAKE_GH_ID`` for the comment search and exits ``$FAKE_GH`` for a post.
     """
     bin_dir = tmp_path / "tools"
     bin_dir.mkdir()
@@ -610,6 +611,8 @@ def fake_tools(tmp_path: Path) -> Path:
         "gh": (
             'echo "gh $*" >> "$FAKE_LOG"\n'
             'case "$*" in\n'
+            '  "api user --jq .login") [ -n "${FAKE_GH_LOGIN:-}" ] || exit 1\n'
+            '    echo "$FAKE_GH_LOGIN" ;;\n'
             '  *"--jq .body"*) echo "<!-- earlier -->" ;;\n'
             '  *--jq*) echo "${FAKE_GH_ID:-}" ;;\n'
             '  *) exit "${FAKE_GH:-0}" ;;\n'
@@ -687,10 +690,11 @@ def test_no_comment_outside_a_pull_request(tmp_path, fake_tools) -> None:
 
 def test_the_first_run_posts_the_comment(tmp_path, fake_tools) -> None:
     _, calls, _ = _summarize(tmp_path, fake_tools, COMMENT="true", EVENT=_PR)
-    search, summary, post = calls
+    login, search, summary, post = calls
+    assert login == "gh api user --jq .login"
     assert search.startswith("gh api --paginate repos/o/r/issues/7/comments --jq")
-    # Only a bot's comment counts; anyone can post one that starts with the marker.
-    assert '.user.type == "Bot"' in search
+    # The default token cannot read its login; it posts as github-actions[bot].
+    assert '.user.login == "github-actions[bot]"' in search
     assert 'startswith("<!-- repowise-ci-summary -->")' in search
     assert "--comment-file" in summary and "--previous" not in summary
     assert post.startswith("gh api --method POST repos/o/r/issues/7/comments -F body=@")
@@ -698,10 +702,24 @@ def test_the_first_run_posts_the_comment(tmp_path, fake_tools) -> None:
 
 def test_a_later_run_edits_the_comment_in_place(tmp_path, fake_tools) -> None:
     _, calls, _ = _summarize(tmp_path, fake_tools, COMMENT="true", EVENT=_PR, FAKE_GH_ID="42")
-    _, previous, summary, edit = calls
+    _, _, previous, summary, edit = calls
     assert previous == "gh api repos/o/r/issues/comments/42 --jq .body"
     assert "--previous" in summary
     assert edit.startswith("gh api --method PATCH repos/o/r/issues/comments/42 -F body=@")
+
+
+def test_a_personal_token_finds_its_own_comment(tmp_path, fake_tools) -> None:
+    _, calls, _ = _summarize(
+        tmp_path, fake_tools, COMMENT="true", EVENT=_PR, FAKE_GH_LOGIN="octo-cat"
+    )
+    assert '.user.login == "octo-cat"' in calls[1]
+
+
+def test_an_unexpected_login_falls_back_to_the_actions_bot(tmp_path, fake_tools) -> None:
+    _, calls, _ = _summarize(
+        tmp_path, fake_tools, COMMENT="true", EVENT=_PR, FAKE_GH_LOGIN='x" or true'
+    )
+    assert '.user.login == "github-actions[bot]"' in calls[1]
 
 
 def test_a_comment_that_cannot_be_edited_is_replaced(tmp_path, fake_tools) -> None:
@@ -718,7 +736,7 @@ def test_each_working_directory_keeps_its_own_comment(tmp_path, fake_tools) -> N
     _, calls, _ = _summarize(
         tmp_path, fake_tools, COMMENT="true", EVENT=_PR, WORKING_DIRECTORY="apps/my web"
     )
-    search, summary, _ = calls
+    _, search, summary, _ = calls
     assert f'startswith("{comment_marker("apps/my web")}")' in search
     assert summary.endswith("--comment-key apps/my_web") or "--comment-key apps/my_web " in summary
 

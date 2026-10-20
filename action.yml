@@ -107,7 +107,9 @@ inputs:
       permission; on a fork's pull request the comment is skipped with a warning.
     default: "false"
   github-token:
-    description: Token the summary comment is posted with.
+    description: >-
+      Token the summary comment is posted with; a later run edits only the
+      comment this token's own account posted.
     default: ${{ github.token }}
   upload-sarif:
     description: >-

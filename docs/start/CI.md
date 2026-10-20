@@ -139,7 +139,7 @@ release the action installs.
 | `health-fail-on` | `introduced` | What fails the health gate: `introduced`, or `worsened` to fail on findings the change made worse too. |
 | `risk-fail-above-percentile` | none | With `risk` in `checks`, fail when the change ranks above this percentile of recent commits. Empty reports the rank without gating. |
 | `comment` | `false` | Post one pull-request comment summarizing every gate, updated in place on each run. |
-| `github-token` | `github.token` | Token the summary comment is posted with. |
+| `github-token` | `github.token` | Token the summary comment is posted with; a later run edits only the comment this token's own account posted. |
 | `upload-sarif` | `false` | Upload doc drift, security and health findings to code scanning. |
 | `impacted-tests` | `false` | Select the tests the change needs (needs a cached `.repowise` index); see [below](#selecting-the-tests-a-change-needs). |
 | `impacted-tests-runner` | `auto` | `auto`, `pytest`, `go`, `jest` or `files`. |

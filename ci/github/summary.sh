@@ -43,9 +43,12 @@ print((event.get("pull_request") or {}).get("number") or "")' 2>/dev/null)
     echo "::warning::The GitHub CLI (gh) is not installed, so no summary comment is posted."
     pr=""
   else
-    # Only a bot's comment: anyone can post one that starts with the marker.
+    # Only this token's own comment: anyone can post one that starts with the
+    # marker. The default token cannot read /user; it posts as github-actions[bot].
+    login=$(gh api user --jq .login 2>/dev/null)
+    [[ "$login" =~ ^[A-Za-z0-9-]+(\[bot\])?$ ]] || login="github-actions[bot]"
     comment_id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$pr/comments" \
-      --jq ".[] | select(.user.type == \"Bot\" and (.body | startswith(\"$marker\"))) | .id" \
+      --jq ".[] | select(.user.login == \"$login\" and (.body | startswith(\"$marker\"))) | .id" \
       2>/dev/null | head -n 1)
     if [[ -n "$comment_id" ]] && gh api "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id" \
       --jq .body >"$work/previous.md" 2>/dev/null; then
