@@ -894,3 +894,25 @@ def test_history_at_the_busy_floor_or_uncounted_is_not_flagged() -> None:
         facts = _facts(files, history_commits=commits)
         assert build_context(facts).history_too_short is False
         assert _run(code.fragile_file, facts).status == "evaluated"
+
+
+def _dead_row(path: str) -> dict:
+    return {"id": path, "kind": "unused_export", "file_path": path, "symbol_name": "old",
+            "lines": 5, "safe_to_delete": True, "status": "open"}
+
+
+def test_dead_code_actions_skip_tests_by_the_shared_classifier() -> None:
+    from repowise.core.analysis.actions.build import build_dead
+
+    paths = ("src/components/tests/tests-view.tsx", "src/components/foo.test.ts")
+    dead = build_dead([_dead_row(p) for p in paths], {})
+    assert [d.file_path for d in dead["dead"]] == ["src/components/tests/tests-view.tsx"]
+
+
+def test_dead_code_actions_read_the_stored_test_flag_first() -> None:
+    from repowise.core.analysis.actions.build import build_dead
+
+    path = "core/check_test.py"
+    stored = {path: _file(path, is_test=False)}
+    assert [d.file_path for d in build_dead([_dead_row(path)], stored)["dead"]] == [path]
+    assert build_dead([_dead_row(path)], {})["dead"] == ()
