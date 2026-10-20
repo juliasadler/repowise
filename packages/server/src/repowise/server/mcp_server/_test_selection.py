@@ -303,6 +303,17 @@ def basis_of(selection: Selection) -> str:
     return "measured" if "coverage" in selection.basis.values() else "inferred"
 
 
+def split_broadcast(selection: Selection) -> tuple[list[str], list[str]]:
+    """``(the tests the change reaches, the broadcast ones)``, each in run order.
+
+    A full run has no broadcast: every test runs for the run-all reasons.
+    """
+    if selection.run_all or not selection.broadcast:
+        return list(selection.tests), []
+    spread = [t for t in selection.tests if t.split("::", 1)[0] in selection.broadcast]
+    return selection.reached_tests(), spread
+
+
 def selection_block(
     result: dict[str, Any],
     selection: Selection,
@@ -320,9 +331,14 @@ def selection_block(
     index predates files outside the change and the selection holds over half
     the suite: the list stands and ``summary`` says why. The tail of a list
     holding most of the suite is not stored when every test is to run anyway.
+    ``total`` and ``tests_to_run`` leave out the broadcast (:func:`split_broadcast`),
+    counted in ``broadcast_total`` when there is one and stored apart.
     *detail* adds ``why`` and ``basis_by_file``.
     """
-    run_list = list(selection.tests)  # in run order (``test_ranking``)
+    # In run order (``test_ranking``); the broadcast is counted apart.
+    run_list, broadcast = split_broadcast(selection)
+    if broadcast:
+        collector.add(f"{label}.broadcast_tests ({len(broadcast)})", broadcast)
     shown = run_list[:limit]
     known = set(selection.known_tests)
     held = len(known & set(selection.test_files))
@@ -361,9 +377,11 @@ def selection_block(
             f"{len(known)} test files were selected; run the whole suite, or "
             "`repowise update` to narrow it."
             if degraded
-            else _summary(selection, len(run_list), always, limit)
+            else _summary(selection, len(run_list), always, limit, len(broadcast))
         ),
     }
+    if broadcast:
+        block["broadcast_total"] = len(broadcast)
     if not detail:
         return block
     block["why"] = {
@@ -382,19 +400,32 @@ def selection_block(
     return block
 
 
-def _summary(selection: Selection, total: int, always: int, limit: int) -> str:
+NO_TESTS = "No test needs to run for this change."
+
+
+def _summary(
+    selection: Selection, total: int, always: int, limit: int, broadcast: int = 0
+) -> str:
     shown = f"; showing first {limit}" if total > limit else ""
     if selection.run_all:
         lead = selection.reasons[0] if selection.reasons else "the selection could not vouch"
         named = f" Run these {total} first{shown}." if total else ""
         return f"Run every test: {lead}{named}"
+    spread = (
+        f" {broadcast} more test(s) must still run because a conftest on a route keeps "
+        "every test under it (broadcast_total; the reasons say why)."
+        if broadcast
+        else ""
+    )
     if not total:
-        return "No test needs to run for this change."
+        return f"No test the change reaches directly.{spread}" if spread else NO_TESTS
     # The share of the suite, so a selection holding most of it never reads as targeted.
     known = set(selection.known_tests)
-    held = len(known & set(selection.test_files))
+    held = len(known & (set(selection.test_files) - set(selection.broadcast)))
     share = f" ({held} of {len(known)} test files)" if known else ""
     rule = f", {always} of them because they run with every subset" if always else ""
     if known and held == len(known):
         return f"{total} test(s) to run for this change, every test file there is{rule}{shown}."
+    if spread:
+        return f"{total} test(s) to run for this change{share}{rule}{shown}.{spread}"
     return f"{total} test(s) to run for this change{share}{rule}{shown}; the rest can be skipped."

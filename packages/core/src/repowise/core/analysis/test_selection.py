@@ -37,7 +37,11 @@ in a child process (it imports one module, but exercises far more). The tests
 reaching files whose imports moved between the indexed commit and the base
 (:func:`plan_gap`) run too. A test package's ``__init__.py`` or a
 ``conftest.py`` (changed, deleted, or on a route to a changed file) stands for
-every test under its directory. A helper module tests import stands for the
+every test under its directory, unless :mod:`.conftest_routes` narrows a
+conftest the change reaches only through its imports to the tests it can
+break. The tests only a scope file on a route stands for are the selection's
+``broadcast``: they run, and are counted apart from the tests the change
+reaches. A helper module tests import stands for the
 tests that import it, directly or through other helpers (basis
 ``helper-importers``), which are the files that run it: Python runs the
 package file for each module in it, and pytest loads a conftest for each test
@@ -272,13 +276,18 @@ class Selection:
     ``changed-test``, ``call-graph``, ``import-graph``, ``conftest-fixture``
     (a test using a conftest fixture that reaches the change),
     ``conftest-import-check`` (one test that loads a conftest the change reaches
-    only through its imports), ``filename-pattern``, ``unknown``, ``none`` when
+    only through its imports), ``conftest-broadcast`` (a test only a conftest
+    keeping every test under it reaches), ``filename-pattern``, ``unknown``, ``none`` when
     nothing was asked (no index), or a scope's ``ecosystem``,
     ``package-importers``, ``named-by``, ``fixture-readers`` or ``owner-package``.
     ``why`` says, per selected test file, what put it in: the changed file and evidence that
     reached it, or the reason it runs with every subset. ``known_tests`` are
     the checkout's runnable test files (empty when not read), so a selection
-    can say how much of the suite it is.
+    can say how much of the suite it is. ``broadcast`` maps each selected test
+    file that runs only because a ``conftest.py`` or test-package
+    ``__init__.py`` on a route to a changed file stands for every test under
+    it to that file: they run, but a count of what the change reaches leaves
+    them out.
     """
 
     run_all: bool
@@ -291,6 +300,11 @@ class Selection:
     basis: Mapping[str, str] = field(default_factory=dict)
     why: Mapping[str, str] = field(default_factory=dict)
     known_tests: tuple[str, ...] = ()
+    broadcast: Mapping[str, str] = field(default_factory=dict)
+
+    def reached_tests(self) -> list[str]:
+        """:attr:`tests` without the :attr:`broadcast` ones, in order."""
+        return [t for t in self.tests if t.split("::", 1)[0] not in self.broadcast]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -303,6 +317,7 @@ class Selection:
             "skipped_files": list(self.skipped_files),
             "basis": dict(self.basis),
             "why": dict(self.why),
+            "broadcast": dict(self.broadcast),
         }
 
 
@@ -608,6 +623,12 @@ def select_tests(inp: SelectionInput) -> Selection:
         ]
     )
     notes = _notes(inp, triage.skipped, always, traced)
+    broadcast = _broadcast(evidence, test_files, {f for _, f in in_scope} | set(always))
+    why = {**scope_why, **gap_why, **_why(triage.code, per_file, evidence), **always}
+    why.update(
+        (t, f"{path} changed ({scope} is on its route and stands for every test under it)")
+        for t, (path, scope) in broadcast.items()
+    )
     return Selection(
         run_all=bool(run_all),
         reasons=tuple(run_all + evidence.notes + scope_notes + notes),
@@ -617,9 +638,26 @@ def select_tests(inp: SelectionInput) -> Selection:
         always_run=inp.config.always_run,
         skipped_files=tuple(triage.skipped),
         basis=basis,
-        why={**scope_why, **gap_why, **_why(triage.code, per_file, evidence), **always},
+        why=why,
         known_tests=tuple(inp.known_tests),
+        broadcast={t: scope for t, (_, scope) in broadcast.items()},
     )
+
+
+def _broadcast(
+    ev: _Evidence, selected: Collection[str], also: Collection[str]
+) -> dict[str, tuple[str, str]]:
+    """Selected test files only a scope file on a route put in, nothing else.
+
+    *also* are the test files selected outside the per-file evidence (a
+    scope's own tests, the tests every subset runs).
+    """
+    selected = set(selected)
+    return {
+        t: v
+        for t, v in ev.broadcast.items()
+        if t in selected and t not in ev.reached and t not in also
+    }
 
 
 _UNPLACED_REASON = "the graph has no edge from it into the repository's code"
@@ -659,8 +697,15 @@ def _why(
     return out
 
 
-# The two vias a narrowed conftest route adds (``conftest_routes``), spelled out.
+#: The via of a test that runs only because a conftest on the route keeps every
+#: test under it (``conftest_routes``): selected, not reached by the change.
+BROADCAST_VIA = "conftest-broadcast"
+
+# The vias a conftest route adds (``conftest_routes``), spelled out.
 _VIA_WHY = {
+    BROADCAST_VIA: (
+        f"{BROADCAST_VIA}: a conftest above it is on the route and keeps every test under it"
+    ),
     "conftest-fixture": (
         "conftest-fixture: it asks for a conftest fixture whose code runs into the change"
     ),
@@ -1021,6 +1066,10 @@ class _Evidence:
     notes: list[str] = field(default_factory=list)
     # Known tests under each directory set (:func:`_known_under`), per selection.
     under_memo: dict[frozenset[str], list[str]] = field(default_factory=dict, compare=False)
+    # Test files evidence or a changed scope file reached, and ``{test file:
+    # (changed file, scope on its route)}`` for those a route's scope expanded to.
+    reached: set[str] = field(default_factory=set, compare=False)
+    broadcast: dict[str, tuple[str, str]] = field(default_factory=dict, compare=False)
 
     @classmethod
     def of(cls, inp: SelectionInput, deleted: set[str]) -> _Evidence:
@@ -1092,7 +1141,7 @@ def _file_tests(
     tests = ev.present([*ev.covered.get(path, ()), *found])
     basis = _basis(path, ev.covered, ev.inferred, ev.unknown)
     scopes, basis = _scope_files(path, found, basis)
-    tests = _expand_scopes(tests, scopes, ev)
+    tests = _expand_scopes(path, tests, scopes, ev)
     helpers = sorted(
         {f for _, f in found if not is_runnable_test(f)} - ev.deleted - scopes - {path}
     )
@@ -1123,10 +1172,36 @@ def _scope_files(path: str, found: list[_TestRef], basis: str) -> tuple[set[str]
     return scopes, basis
 
 
-def _expand_scopes(tests: list[_TestRef], scopes: set[str], ev: _Evidence) -> list[_TestRef]:
+def _expand_scopes(
+    path: str, tests: list[_TestRef], scopes: set[str], ev: _Evidence
+) -> list[_TestRef]:
+    """*tests* with each scope file replaced by the tests under its directory.
+
+    Records what reached *path* (:attr:`_Evidence.reached`), and each test only
+    a scope on its route, not *path* itself, put in (:attr:`_Evidence.broadcast`).
+    """
     kept = [(t, f) for t, f in tests if f not in scopes]
     dirs = {str(PurePosixPath(i).parent) for i in scopes}
-    return kept + [(t, t) for t in _known_under(ev, dirs) if t not in ev.deleted]
+    under = [t for t in _known_under(ev, dirs) if t not in ev.deleted]
+    own = set(_known_under(ev, {str(PurePosixPath(path).parent)})) if path in scopes else set()
+    spread = {t for t, via in ev.inferred.get(path, ()) if via == BROADCAST_VIA}
+    ev.reached.update({f for _, f in kept if f and f not in spread} | own)
+    route_scopes = sorted(scopes - {path}, key=lambda s: -len(s))
+    for t in spread:
+        ev.broadcast.setdefault(t, (path, _scope_over(t, route_scopes)))
+    for scope in route_scopes:
+        for t in _known_under(ev, {str(PurePosixPath(scope).parent)}):
+            ev.broadcast.setdefault(t, (path, scope))
+    return kept + [(t, t) for t in under]
+
+
+def _scope_over(test: str, scopes: list[str]) -> str:
+    """The first of *scopes* whose directory holds *test*, else the first (a test
+    reached through an importer elsewhere), else ``""``."""
+    return next(
+        (s for s in scopes if _under({str(PurePosixPath(s).parent)}, [test])),
+        scopes[0] if scopes else "",
+    )
 
 
 def _known_under(ev: _Evidence, dirs: Collection[str]) -> list[str]:
@@ -1248,6 +1323,7 @@ _VIAS = (
     "import-graph",
     "conftest-fixture",
     "conftest-import-check",
+    BROADCAST_VIA,
     "filename-pattern",
 )
 

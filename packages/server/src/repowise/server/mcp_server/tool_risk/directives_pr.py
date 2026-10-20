@@ -128,6 +128,11 @@ def tests_summary(
 ) -> str:
     """Summary sentences for the run list and, on request, the typed recommendations."""
     suffix = f" {run_total} test(s) to run, {basis}." if run_total else ""
+    if spread := tests_fields.get("tests_broadcast_total"):
+        suffix += (
+            f" {spread} more must still run because a conftest on a route keeps every test "
+            "under it (tests_broadcast_total)."
+        )
     if tests_fields.get("tests_run_all"):
         suffix += " Every test must run (tests_run_all_reasons)."
     recommendations_total = len(test_impact.get("recommendations") or [])

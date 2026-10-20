@@ -111,6 +111,24 @@ def test_args_prints_the_subset_on_one_line(repo) -> None:
     assert "documentation: no tests needed" in _err(result)
 
 
+def test_the_args_header_counts_the_conftest_broadcast_apart() -> None:
+    from repowise.cli.commands.impacted_tests_cmd import _args_header
+    from repowise.core.analysis.test_selection import Selection
+
+    tests = ("tests/test_a.py", "tests/test_b.py")
+    selection = Selection(
+        run_all=False,
+        reasons=(),
+        tests=tests,
+        test_files=tests,
+        broadcast={"tests/test_b.py": "tests/conftest.py"},
+    )
+    assert _args_header(selection, list(tests), "pytest", False) == (
+        "2 argument(s) for pytest; 1 selected test file(s) run only because a conftest "
+        "on a route keeps every test under it."
+    )
+
+
 def test_json_adds_the_selection_to_the_report(repo) -> None:
     result = _run(repo, "main...feat", "--format", "json", "--runner", "files")
     assert result.exit_code == 0, result.output

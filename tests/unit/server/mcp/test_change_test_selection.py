@@ -545,3 +545,52 @@ def test_a_run_all_list_holding_most_of_the_suite_stores_no_tail(tmp_path) -> No
 
     assert block["status"] == "run_all" and block["truncated"] is True
     assert collector.empty
+
+
+def _spread(*, run_all: bool = False) -> object:
+    from repowise.core.analysis.test_selection import Selection
+
+    suite = tuple(f"tests/test_{i}.py" for i in range(20))
+    return Selection(
+        run_all=run_all,
+        reasons=("tests/conftest.py keeps every test under it",),
+        tests=suite[:5],
+        test_files=suite[:5],
+        known_tests=suite,
+        why=dict.fromkeys(suite[:5], "src/a.py changed (import-graph)"),
+        broadcast=dict.fromkeys(suite[2:5], "tests/conftest.py"),
+    )
+
+
+def test_the_conftest_broadcast_is_counted_apart_from_the_headline(tmp_path) -> None:
+    from repowise.server.mcp_server._budget import OmissionCollector
+    from repowise.server.mcp_server._test_selection import selection_block
+
+    collector = OmissionCollector("get_change_risk", store_path=tmp_path / "omissions.db")
+    block = selection_block({}, _spread(), collector, limit=10, label="impacted_tests")
+
+    assert block["total"] == 2 and block["broadcast_total"] == 3
+    assert block["tests_to_run"] == ["tests/test_0.py", "tests/test_1.py"]
+    assert block["summary"].startswith("2 test(s) to run for this change (2 of 20 test files).")
+    assert "3 more test(s) must still run because a conftest" in block["summary"]
+    # The broadcast tests are stored for recovery, not dropped.
+    assert not collector.empty
+
+    # A full run has no broadcast: every listed test is what to run first.
+    full = selection_block({}, _spread(run_all=True), collector, limit=10, label="impacted_tests")
+    assert full["total"] == 5 and "broadcast_total" not in full
+
+
+def test_get_risk_counts_the_conftest_broadcast_apart(tmp_path) -> None:
+    from repowise.server.mcp_server._budget import OmissionCollector
+    from repowise.server.mcp_server.tool_risk.directives import ChangeTests, _tests_to_run
+    from repowise.server.mcp_server.tool_risk.directives_pr import tests_summary
+
+    collector = OmissionCollector("get_risk", store_path=tmp_path / "omissions.db")
+    population, basis, fields = _tests_to_run(ChangeTests(selection=_spread()), collector)
+
+    assert population == ["tests/test_0.py", "tests/test_1.py"]
+    assert fields["tests_broadcast_total"] == 3
+    assert "3 more must still run because a conftest" in tests_summary(
+        len(population), basis, fields, {}, False, 10
+    )

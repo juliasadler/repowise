@@ -1122,7 +1122,10 @@ per-file `selected.basis`: `full-run`, `no-tests-needed`, `test-tree`,
 `test-package`, `conftest`, `helper-importers`, `deleted-test`, `coverage`,
 `changed-test`, `call-graph`, `import-graph`, `filename-pattern`, `unknown`,
 or `none` (no index), and a per-test `selected.why`: the first changed file and
-evidence that selected it, or why it runs with every subset. When it runs everything:
+evidence that selected it, or why it runs with every subset. `selected.broadcast`
+maps each selected test file that runs only because a conftest or test-package
+`__init__.py` on a route keeps every test under it to that file; agent views
+count these apart from the tests the change reaches. When it runs everything:
 [CI](../start/CI.md#selecting-the-tests-a-change-needs).
 
 **Run order.** `--format args` and `json` list the selected tests likeliest to fail

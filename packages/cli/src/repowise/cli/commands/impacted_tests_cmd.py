@@ -312,6 +312,11 @@ def _args_header(selection, args: list[str], resolved: str, prioritize: bool) ->
         )
     if selection.run_all:
         return "Run every test:"
+    if spread := len(selection.broadcast):
+        return (
+            f"{len(args)} argument(s) for {resolved}; {spread} selected test file(s) run "
+            "only because a conftest on a route keeps every test under it."
+        )
     return f"{len(args)} argument(s) for {resolved}."
 
 
