@@ -32,9 +32,11 @@ from repowise.server.mcp_server._helpers import (
 from repowise.server.mcp_server._test_selection import (
     UNAVAILABLE_REASON,
     basis_of,
+    split_apart,
 )
 from repowise.server.mcp_server.tool_risk.directives_pr import (
     _WORKSPACE_FAMILIES,  # noqa: F401  re-exported
+    APART_FIELDS,
     _as_path,
     _drop_family,
     _project_recommendation,  # noqa: F401  re-exported
@@ -324,6 +326,15 @@ def _cross_repo_relationships(
                     "reason": "live_repository_heads_not_compared",
                 },
                 **({"reason": "per_edge_match_provenance_not_retained"} if structural else {}),
+                # How far to trust the edge set, and this repo's unlinked calls.
+                **(
+                    {"graph_evidence": evidence}
+                    if (evidence := enricher.graph_evidence_brief())
+                    else {}
+                ),
+                **(
+                    {"http_calls": split} if (split := enricher.http_call_split(repo_alias)) else {}
+                ),
             },
         }
     except Exception:
@@ -562,7 +573,12 @@ def _tests_to_run(
             "tests_status": tests.status,
             "tests_status_reason": tests.message,
         }
-    population = list(selection.tests)  # in run order (``test_ranking``)
+    # In run order (``test_ranking``); the tests counted apart still run.
+    population, *apart = split_apart(selection)
+    counts = dict(zip(APART_FIELDS, apart, strict=True))
+    for key, tests in counts.items():
+        if tests:
+            collector.add(f"directive.{key.removesuffix('_total')} ({len(tests)})", tests)
     reasons = list(selection.reasons)
     if len(reasons) > _RUN_ALL_REASONS_LIMIT:
         collector.add(
@@ -572,6 +588,7 @@ def _tests_to_run(
         )
     shown = dict.fromkeys(t.split("::", 1)[0] for t in population[:_TESTS_TO_RUN_LIMIT])
     extra: dict[str, Any] = {"tests_run_all": selection.run_all}
+    extra.update((key, len(tests)) for key, tests in counts.items() if tests)
     if selection.run_all:
         extra["tests_run_all_reasons"] = reasons[:_RUN_ALL_REASONS_LIMIT]
     extra["tests_to_run_why"] = {p: selection.why[p] for p in shown if p in selection.why}

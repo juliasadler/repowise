@@ -40,6 +40,22 @@ _UNKNOWN_ONLY_HINT = (
     "performance is an `include` value. See docs/agent/MCP_TOOLS.md."
 )
 
+#: Keys built only when ``include`` asks (blocks.py, pillars.py): a missing
+#: include, not a misspelling, is why such a key is absent.
+_INCLUDE_OF_KEY = {
+    **dict.fromkeys(("performance_opportunities", "performance_summary"), "performance"),
+    **dict.fromkeys(
+        (
+            "refactoring_opportunities",
+            "refactoring_summary",
+            "refactoring_plans",
+            "suggestion_legend",
+        ),
+        "refactoring",
+    ),
+    **{k: k for k in ("trend", "coverage", "doc_drift", "untested_complexity", "what_if")},
+}
+
 #: Which control accepts each value, to name the right one for a swapped value.
 _CONTROL_OF_VALUE = {**dict.fromkeys(COUNTS, "counts"), **dict.fromkeys(SCOPES, "scope")}
 
@@ -132,5 +148,17 @@ def _project(
     if unknown:
         result["unknown_only_keys"] = unknown
         _stamp_collection(result, "unknown_only_keys", total=len(unknown))
-        result["unknown_only_keys_hint"] = _UNKNOWN_ONLY_HINT
+        result["unknown_only_keys_hint"] = _unknown_only_hint(req, unknown)
     return result
+
+
+def _unknown_only_hint(req: HealthRequest, unknown: list[str]) -> str:
+    """The generic hint, led by the include each include-gated miss needs."""
+    needs = [
+        f'only=["{raw}"] needs include=["{include}"].'
+        for raw, resolved in zip(req.only, req.only_list, strict=True)
+        if raw in unknown
+        and (include := _INCLUDE_OF_KEY.get(resolved))
+        and include not in req.include_set
+    ]
+    return " ".join(dict.fromkeys([*needs, _UNKNOWN_ONLY_HINT]))

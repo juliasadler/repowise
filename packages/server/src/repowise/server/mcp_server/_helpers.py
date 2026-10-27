@@ -167,6 +167,15 @@ def _is_workspace_mode() -> bool:
     return _state._registry is not None
 
 
+def _cross_repo_cut(alias: str | None) -> dict:
+    """``lookup`` and ``alias`` for the dead-code cross-repo cut
+    (``serve_findings``) on the repo *alias* names; both ``None`` outside
+    workspace mode, and an empty artifact simply cuts nothing."""
+    if not _is_workspace_mode():
+        return {"lookup": None, "alias": None}
+    return {"lookup": _state._cross_repo_enricher, "alias": alias}
+
+
 async def _resolve_repo_context(repo: str | None = None) -> Any:
     """Resolve the per-repo resource context for the given ``repo`` parameter.
 
@@ -214,6 +223,9 @@ async def _resolve_repo_context(repo: str | None = None) -> Any:
 
 def _unsupported_repo_all(tool_name: str) -> dict:
     """Return an error dict for tools that don't support ``repo='all'``."""
+    from repowise.server.mcp_server._savings.interaction import note_error_reason
+
+    note_error_reason("invalid_args")
     registry = _state._registry
     available = registry.get_all_aliases() if registry is not None else []
     return {
@@ -390,7 +402,7 @@ def _build_origin_story(
     if git_meta is None:
         return {
             "available": False,
-            "summary": f"No git history available for {file_path}.",
+            "summary": f"No git history is indexed for {file_path}.",
         }
 
     authors = json.loads(git_meta.top_authors_json) if git_meta.top_authors_json else []
@@ -557,7 +569,9 @@ def _compute_alignment(
             "This file is ungoverned — it may be an outlier or simply undocumented."
             if currencies
             else "This index holds no accepted decisions, so no file is governed "
-            "yet; a person accepts a candidate with `repowise decision confirm`."
+            "yet; review `repowise decision candidates` and accept one with "
+            "`repowise decision confirm <id> --agent <your slug>`, adding "
+            "`--evidence <commit|file>` or `--reason` if it lacks them."
         )
         return {
             "score": "none",

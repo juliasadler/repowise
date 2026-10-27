@@ -13,7 +13,12 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { CATEGORY_CAP, biomarkerLabel, isKnownBiomarker } from "../../src/health/biomarker-glossary.js";
+import {
+  CATEGORY_CAP,
+  PERFORMANCE_HOME_BIOMARKERS,
+  biomarkerLabel,
+  isKnownBiomarker,
+} from "../../src/health/biomarker-glossary.js";
 
 describe("CATEGORY_CAP parity", () => {
   it("pins the performance cap to scoring.py's _PERFORMANCE_CATEGORY_CAPS", () => {
@@ -31,5 +36,12 @@ describe("isKnownBiomarker", () => {
   it("rejects ids the glossary does not describe", () => {
     expect(isKnownBiomarker("not_a_marker")).toBe(false);
     expect(isKnownBiomarker("constructor")).toBe(false);
+  });
+});
+
+describe("performance glossary", () => {
+  it("describes every performance biomarker", () => {
+    const missing = [...PERFORMANCE_HOME_BIOMARKERS].filter((name) => !isKnownBiomarker(name));
+    expect(missing).toEqual([]);
   });
 });

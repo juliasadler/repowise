@@ -243,6 +243,18 @@ def context_command(
     _ta.print_index_note(payload, fmt)
 
 
+def _fix_signal(fix: dict) -> str:
+    """The card's fix-history signal with its window, or "" when it has none."""
+    if not fix.get("fix_count"):
+        return ""
+    magnet = " (bug magnet)" if fix.get("bug_magnet") else ""
+    window = f" in {fix['window']}" if fix.get("window") else ""
+    return (
+        f"{fix['fix_count']} bug fixes{window}, "
+        f"last {fix.get('last_fix_days_ago', '?')}d ago{magnet}"
+    )
+
+
 def _render(projected: dict) -> None:
     from rich.markup import escape
     from rich.table import Table
@@ -286,12 +298,9 @@ def _render(projected: dict) -> None:
         signals = []
         if card.get("hotspot"):
             signals.append("hotspot")
-        fix = card.get("fix_history") or {}
-        if fix.get("fix_count"):
-            magnet = " (bug magnet)" if fix.get("bug_magnet") else ""
-            signals.append(
-                f"{fix['fix_count']} bug fixes, last {fix.get('last_fix_days_ago', '?')}d ago{magnet}"
-            )
+        fix_signal = _fix_signal(card.get("fix_history") or {})
+        if fix_signal:
+            signals.append(fix_signal)
         if card.get("stale"):
             signals.append("docs stale")
         if card.get("episodes"):

@@ -86,7 +86,7 @@ def _full_data(**kw) -> EditorFileData:
         "indexed_at": "2026-10-19",
         "indexed_commit": "a1b2c3d",
         "architecture_summary": "A demo service.",
-        "key_modules": [KeyModule(name="src/api", purpose="HTTP layer", file_count=4, owner=None)],
+        "key_modules": [KeyModule(name="src/api", purpose="HTTP layer", owner=None)],
         "entry_points": ["src/main.py"],
         "hotspots": [
             HotspotFile(
@@ -171,7 +171,7 @@ def test_repo_facts_lead_the_block(gen):
 
 def test_hotspot_rows_carry_a_date_not_an_age(gen):
     rendered = gen.render(_full_data())
-    assert "4 bug fixes, last fix 2026-10-12 (bug magnet); 12 commits/90d" in rendered
+    assert "4 bug fixes in 6 months, last fix 2026-10-12 (bug magnet); 12 commits/90d" in rendered
     assert " ago" not in rendered
 
 
@@ -218,3 +218,10 @@ def test_the_shared_body_differs_only_in_the_read_note():
         "Claude Code requires a raw Read of any file you will Edit, and that Read is correct and expected.",
         "Reading a file before you edit it is correct and expected.",
     ) == agents
+
+
+def test_the_short_confirm_command_supplies_evidence(gen):
+    # `decision add` records no evidence, so a bare confirm of that candidate is
+    # refused with "no evidence reference"; the copied command must carry it.
+    lean = gen.render(_full_data())
+    assert "`repowise decision confirm <id> --agent <your slug> --evidence <commit|file>`" in lean

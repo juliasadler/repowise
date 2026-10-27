@@ -23,10 +23,10 @@ from __future__ import annotations
 import re
 import subprocess
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from .git_cli import _git, path_filter, split_revspec, untracked_paths
+from .git_cli import _git, checkout_relative, path_filter, split_revspec, untracked_paths
 
 # ``@@ -a,b +c,d @@`` - both sides. ``b``/``d`` default to 1 when omitted; a
 # count of 0 means "nothing on that side" (pure insertion / pure deletion).
@@ -241,16 +241,19 @@ def changed_lines(
     of this branch would bring. A *base* that does not resolve, or shares
     no merge-base, falls back to the plain working-tree diff and its label.
     *skip_untracked* (gitignore-style) names untracked files not to read; the
-    caller still filters tracked paths. *label* is a human string naming what
-    was diffed. Raises ``ValueError`` on an unknown revision so the caller can
-    fail loudly rather than silently reporting "no changes".
+    caller still filters tracked paths. Paths are relative to *repo_path*, as
+    the index names them (see :func:`~.git_cli.checkout_relative`).
+    *label* is a human string naming what was diffed.
+    Raises ``ValueError`` on an unknown revision so the caller can fail loudly
+    rather than silently reporting "no changes".
     """
     if working_tree:
-        return _working_tree_lines(repo_path, base, skip_untracked)
-
-    command, revisions, label = _change_command(repo_path, revspec, staged=staged)
-    diff = _diff(repo_path, [*command, "--unified=0", *DIFF_ARGS, *revisions])
-    return _parse_unified_diff(diff), label
+        changed, label = _working_tree_lines(repo_path, base, skip_untracked)
+    else:
+        command, revisions, label = _change_command(repo_path, revspec, staged=staged)
+        diff = _diff(repo_path, [*command, "--unified=0", *DIFF_ARGS, *revisions])
+        changed = _parse_unified_diff(diff)
+    return checkout_relative(repo_path, changed), label
 
 
 def _change_command(
@@ -312,7 +315,8 @@ def change_set(
     *working_tree* reads what ``HEAD`` does not have, staged or not, untracked
     files included; its base is ``HEAD``. *exclude_patterns* (gitignore-style)
     drops paths that are not part of the change at all, such as repowise's own
-    output. Raises ``ValueError`` on an unknown revision, as :func:`changed_lines` does.
+    output. Paths are relative to *repo_path*, as :func:`changed_lines` names
+    them. Raises ``ValueError`` on an unknown revision, as :func:`changed_lines` does.
     """
     if working_tree:
         command, revisions, label = ["diff"], ["HEAD"], working_tree_label()
@@ -334,6 +338,10 @@ def change_set(
             files[path] = diffs.get(path) or FileDiff(path=path)
     if working_tree:
         files.update(untracked_diffs(repo_path, exclude_patterns))
+    # One re-keying for both sides: each relative path maps back to git's.
+    named = checkout_relative(repo_path, {p: p for p in [*files, *deleted]})
+    deleted = {rel for rel, top in named.items() if top in deleted}
+    files = {rel: replace(files[top], path=rel) for rel, top in named.items() if top in files}
     base, head = _change_ends(repo_path, revspec, staged=staged or working_tree)
     return ChangeSet(files, deleted, label, base, head)
 
@@ -395,8 +403,10 @@ def untracked_diffs(repo_path: str, exclude_patterns: tuple[str, ...] = ()) -> d
     *exclude_patterns* is never read.
     """
     out: dict[str, FileDiff] = {}
+    # Listed from the git top level, so read from there too.
+    root = _git(["rev-parse", "--show-toplevel"], repo_path, check=False).strip() or repo_path
     for path in untracked_paths(repo_path, exclude_patterns):
-        target = Path(repo_path) / path
+        target = Path(root) / path
         try:
             data = b"" if target.stat().st_size > _UNTRACKED_READ_LIMIT else target.read_bytes()
         except OSError:
@@ -430,10 +440,12 @@ def diff_since(
 
     What moves a line number read at one commit (an index's symbol spans) to
     the code being asked about (:func:`map_old_line` over ``FileDiff.hunks``).
+    *paths* and the keys are relative to *repo_path*, as the index names them.
     """
     tail = [until] if until else []
     args = ["diff", "--unified=0", *DIFF_ARGS, since, *tail, "--", *paths]
-    return parse_unified_diff(_diff(repo_path, args))
+    diffs = checkout_relative(repo_path, parse_unified_diff(_diff(repo_path, args)))
+    return {p: replace(d, path=p) for p, d in diffs.items()}
 
 
 def change_diff(
@@ -508,4 +520,5 @@ def index_gap(repo_path: str, indexed_commit: str | None, change: ChangeSet) -> 
     except (subprocess.SubprocessError, OSError):
         return None
     touched = set(change.files) | change.deleted
-    return [p for p in listing.split("\0") if p.strip() and p not in touched]
+    gap = checkout_relative(repo_path, dict.fromkeys(p for p in listing.split("\0") if p.strip()))
+    return [p for p in gap if p not in touched]

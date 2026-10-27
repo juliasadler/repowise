@@ -7,6 +7,7 @@ fails when the two disagree.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
@@ -86,6 +87,17 @@ RULE_RANK: dict[str, int] = {rule: i for i, rule in enumerate(ACTION_RULES)}
 #: An action's value (0-4, as the Fix first queue values work) when its rule
 #: has none of its own: what its severity says.
 SEVERITY_VALUE: dict[str, int] = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+
+
+def evidence_severity(severities: Iterable[str | None], default: str) -> str:
+    """An action's severity from the findings it rests on: the worst of them,
+    held at high (critical is a live credential's, see :attr:`Action.severity`).
+    ``default`` when it rests on none, so a row and its evidence never disagree."""
+    known = [s for s in severities if s in SEVERITY_VALUE]
+    if not known:
+        return default
+    worst = max(known, key=SEVERITY_VALUE.__getitem__)
+    return "high" if worst == "critical" else worst
 
 
 def effective_value(value: int | None, severity: str) -> int:

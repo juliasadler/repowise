@@ -16,6 +16,7 @@ from .phases import (
     _refresh_contract_facts,
     _run_phases,
     _system_graph_phase,
+    analysis_config_changed,
     run_cross_repo_hooks,
 )
 from .repo import (
@@ -35,12 +36,15 @@ from .state import (
     commit_exists,
     count_commits_between,
     get_head_commit,
+    read_index_synced_at,
     read_repo_state,
     read_state_commit,
     reconcile_repo_head_commit,
     resolve_indexed_commit,
     restamp_changed_sync_commit,
+    stamp_workspace_entry,
     sync_workspace_state_from_disk,
+    synced_at_iso,
 )
 from .workspace_pass import (
     _MAX_CONCURRENT_UPDATES,
@@ -66,18 +70,22 @@ from .workspace_pass import (
 __all__ = [
     "IndexedCommit",
     "RepoUpdateResult",
+    "analysis_config_changed",
     "check_repo_staleness",
     "clear_stale_update_pending",
     "commit_exists",
     "count_commits_between",
     "get_head_commit",
+    "read_index_synced_at",
     "read_repo_state",
     "read_state_commit",
     "reconcile_repo_head_commit",
     "resolve_indexed_commit",
     "restamp_changed_sync_commit",
     "run_cross_repo_hooks",
+    "stamp_workspace_entry",
     "sync_workspace_state_from_disk",
+    "synced_at_iso",
     "update_single_repo_index",
     "update_workspace",
 ]

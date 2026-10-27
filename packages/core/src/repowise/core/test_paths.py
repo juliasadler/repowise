@@ -119,6 +119,19 @@ _JVM_SOURCE_ROOTS: frozenset[str] = frozenset({"java", "kotlin", "groovy", "scal
 # GitHub's repository-metadata directory; see ``_classify``.
 _REPO_METADATA_DIR = ".github"
 
+# Inside a JavaScript-family ``src`` tree a ``tests/`` folder is as often a
+# product feature (a Tests page, the components behind it) as a suite, and
+# Jest, Vitest and Playwright collect there by file name, never by folder. So
+# below ``src`` it makes no test tree for these files: a ``.test.``/``.spec.``
+# name, ``__tests__/`` and the scaffolding directories still do. A ``tests/``
+# outside ``src`` keeps counting, because Mocha, AVA and ``node --test`` collect
+# a whole ``test(s)/`` folder by default. Ceiling: an AVA or Mocha run pointed at
+# a ``src/**/tests/`` folder of plainly named files reads as production; reading
+# the runner config's globs would settle that case.
+_JS_FAMILY_TAGS: tuple[str, ...] = ("javascript", "typescript", "vue", "svelte", "astro")
+_SOURCE_TREE = "src"
+_FEATURE_NAMED_TESTS_DIR = "tests"
+
 # The separators a directory segment splits into words on.
 _SEGMENT_WORD_SEPARATORS = re.compile(r"[-_.]+")
 
@@ -208,6 +221,10 @@ _SUPPORT_NAME_WORDS: frozenset[str] = frozenset(
     {"harness", "support", "helper", "helpers", "mock", "mocks", "fixture", "fixtures", "setup"}
 )
 
+# ``utils`` reads as support only when a dot ties it to a module
+# (``foo.test-utils.ts``), which no published ``test-utils`` entry is named.
+_QUALIFIED_SUPPORT_NAME_WORDS: frozenset[str] = frozenset({"utils", "util"})
+
 
 @dataclass(frozen=True, slots=True)
 class _Conventions:
@@ -228,6 +245,7 @@ class _Conventions:
     unambiguous_dir_suffixes: tuple[str, ...]
     lang_dir_tokens: dict[str, frozenset[str]]
     manifest_names: frozenset[str]
+    js_family_exts: frozenset[str]
 
 
 @cache
@@ -271,6 +289,7 @@ def _conventions() -> _Conventions:
         ),
         lang_dir_tokens=REGISTRY.test_dir_tokens_by_language(),
         manifest_names=REGISTRY.package_manifest_filenames(),
+        js_family_exts=REGISTRY.extensions_for(_JS_FAMILY_TAGS),
     )
 
 
@@ -369,7 +388,10 @@ def _is_support_compound(filename: str) -> bool:
     return (
         len(words) >= 2
         and words[-2] == "test"
-        and words[-1] in _SUPPORT_NAME_WORDS
+        and (
+            words[-1] in _SUPPORT_NAME_WORDS
+            or (words[-1] in _QUALIFIED_SUPPORT_NAME_WORDS and "." in lowered.stem)
+        )
         and lowered.suffix in _conventions().source_exts
         and not _is_test_name(filename)
     )
@@ -381,6 +403,26 @@ def _is_test_dir(
     """Whether any directory segment marks this path as sitting in a test tree."""
     return _has_test_segment(segments, original, filename, language) or _has_test_layout(
         segments, original, _conventions().dir_suffixes
+    )
+
+
+def _tree_segments(
+    segments: list[str], original: list[str], filename: str
+) -> tuple[list[str], list[str]]:
+    """*segments* with the ``src/**/tests/`` folders a JS-family file ignores blanked.
+
+    Blanked rather than dropped, so the layout rules keep their positions.
+    """
+    if (
+        PurePosixPath(filename.lower()).suffix not in _conventions().js_family_exts
+        or _SOURCE_TREE not in segments
+    ):
+        return segments, original
+    src = segments.index(_SOURCE_TREE)
+    keep = [i < src or seg != _FEATURE_NAMED_TESTS_DIR for i, seg in enumerate(segments)]
+    return (
+        [seg if k else "" for seg, k in zip(segments, keep, strict=True)],
+        [seg if k else "" for seg, k in zip(original, keep, strict=True)],
     )
 
 
@@ -520,7 +562,9 @@ def _classify(
     )
     if (
         needs_test_dir
-        and not _is_test_dir(segments, original_segments, filename, language)
+        and not _is_test_dir(
+            *_tree_segments(segments, original_segments, filename), filename, language
+        )
         and not _dotnet_project_collects(path, filename, dotnet_projects)
     ):
         return ""
@@ -624,14 +668,15 @@ def in_test_tree(path: str, language: str | None = None) -> bool:
     """Whether a directory alone makes *path* test material, whatever its name.
 
     ``tests/x.py`` and ``src/__mocks__/api.ts`` are; ``core/test_selection.py``
-    is test-shaped only by name. ``.github/`` makes no test tree.
+    is test-shaped only by name. ``.github/`` makes no test tree, and neither
+    does ``src/**/tests/`` for a JavaScript-family file.
     """
     original, lowered = _parts(path)
     segments = lowered[:-1]
     if not segments or _REPO_METADATA_DIR in segments:
         return False
     return any(_is_support_anywhere_dir(seg) for seg in segments) or _is_test_dir(
-        segments, original[:-1], "", language
+        *_tree_segments(segments, original[:-1], original[-1]), "", language
     )
 
 
@@ -707,6 +752,8 @@ _CLASS_TEST_SUFFIXES: dict[str, tuple[str, ...]] = {
     ".cs": ("Test", "Tests"),
     ".kt": ("Test", "Tests", "Spec"),
     ".scala": ("Spec", "Suite", "Test"),
+    # Apex names are case-insensitive and the corpora write all of these.
+    ".cls": ("Test", "Tests", "_Test", "_Tests", "_TEST"),
 }
 
 

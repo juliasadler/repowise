@@ -173,7 +173,7 @@ async def _seed(session) -> str:
     add(
         [
             DeadCodeFinding(repository_id=rid, kind="unused_export", file_path="src/dead.py",
-                            symbol_name=f"f{i}", lines=10, safe_to_delete=True)
+                            symbol_name=f"f{i}", lines=10, confidence=0.9, safe_to_delete=True)
             for i in range(3)
         ]
     )
@@ -223,8 +223,9 @@ async def test_load_actions_view_composes_every_store(async_session) -> None:
     perf, shape = sorted(week["fresh_regressions"], key=lambda a: a["tier"])
     assert (perf["tier"], perf["target"]["path"]) == ("act_now", "src/repo.py")
     assert perf["title"] == "Fix the performance regression in `load` in `src/repo.py`"
+    # Planned, at its finding's severity.
     assert (shape["tier"], shape["severity"], shape["target"]["path"]) == (
-        "plan", "medium", "src/new.py"
+        "plan", "high", "src/new.py"
     )
     assert shape["evidence_ids"] == ["recent"]
 
@@ -328,6 +329,9 @@ async def test_a_test_reaching_through_a_helper_turns_add_tests_into_simplify(as
     facts = await load_repo_facts(async_session, rid)
     assert facts.history_commits == 5
     assert facts.files["src/core.py"].tests_reaching == 0
+    # The lead is measured from its stored details: CCN 44 is worth breaking up.
+    lead = facts.files["src/core.py"].lead
+    assert (lead.function, lead.worth) == ("run", True)
 
     for path, is_test in (
         ("src/core.py", False),
@@ -353,7 +357,8 @@ async def test_a_test_reaching_through_a_helper_turns_add_tests_into_simplify(as
     assert (core.tests_reaching, core.tests_reaching_via) == (1, "import-graph")
 
     # Once production code imports the middle file it is a hub, not test
-    # support, and the second hop no longer counts.
+    # support, and the second hop no longer counts; the import closure still
+    # does, so the file is not claimed untested.
     async_session.add(GraphNode(repository_id=rid, node_id="src/app.py", node_type="file"))
     async_session.add(
         GraphEdge(repository_id=rid, source_node_id="src/app.py",
@@ -362,7 +367,21 @@ async def test_a_test_reaching_through_a_helper_turns_add_tests_into_simplify(as
     await async_session.commit()
     clear_test_map_cache()
     facts = await load_repo_facts(async_session, rid)
-    assert facts.files["src/core.py"].tests_reaching == 0
+    assert facts.files["src/core.py"].tests_reaching == 1
+
+
+async def test_a_file_only_replacing_tests_reach_reads_mocked_only(async_session, monkeypatch) -> None:
+    from repowise.core.analysis.test_reachability import ReachRow
+    from repowise.core.persistence.crud.analysis import actions as loader
+
+    rid = await _seed(async_session)
+
+    async def mocked(_session, _repo_id, paths):
+        return {p: ReachRow("mocked_only", mocked_by=("tests/test_core.py",)) for p in paths}
+
+    monkeypatch.setattr(loader, "any_tests_reaching", mocked)
+    core = (await loader.load_repo_facts(async_session, rid)).files["src/core.py"]
+    assert (core.tests_reaching, core.tests_reaching_via) == (0, "mocked-only")
 
 
 async def test_a_failed_test_map_walk_is_unknown_not_zero(async_session, monkeypatch) -> None:

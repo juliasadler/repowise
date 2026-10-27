@@ -317,7 +317,7 @@ def _build_result(run: PipelineRun) -> PipelineResult:
     file_infos = run.file_infos
     parsed_files = run.parsed_files
     languages = {fi.language for fi in file_infos if hasattr(fi, "language") and fi.language}
-    symbol_count = sum(len(pf.symbols) for pf in parsed_files)
+    symbol_count = sum(pf.symbol_count for pf in parsed_files)
     resume_controller = run.resume_controller
 
     return PipelineResult(

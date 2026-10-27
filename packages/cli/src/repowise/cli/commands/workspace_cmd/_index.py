@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -145,7 +144,7 @@ def _run_index_for_repo(
     _document_added_repo(repo_path, ctx, index, docs)
     _save_added_repo_config(repo_path, ctx, primary_cfg)
     head, state = _save_added_repo_state(repo_path, ctx, index, docs)
-    _record_in_workspace(ws_root, ws_config, alias, head)
+    _record_in_workspace(ws_root, ws_config, alias, head, repo_path)
     _note_missing_docs(alias, state, docs.skip_reason)
 
 
@@ -361,16 +360,14 @@ def _record_in_workspace(
     ws_config: WorkspaceConfig,  # type: ignore[name-defined]
     alias: str,
     head: str | None,
+    repo_path: Path,
 ) -> None:
     """Stamp the workspace entry and refresh cross-repo hooks (best effort)."""
-    from datetime import datetime
-
-    from repowise.core.workspace.update import run_cross_repo_hooks
+    from repowise.core.workspace.update import run_cross_repo_hooks, stamp_workspace_entry
 
     entry = ws_config.get_repo(alias)
     if entry is not None:
-        entry.indexed_at = datetime.now(UTC).isoformat()
-        entry.last_commit_at_index = head
+        stamp_workspace_entry(entry, repo_path, head)
     ws_config.save(ws_root)
 
     # Cross-repo hooks — best effort; never fail the add command.

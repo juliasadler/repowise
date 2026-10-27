@@ -147,8 +147,9 @@ def _print_defects(defect: dict | None) -> None:
     if not defect:
         return
     magnet = " [magenta](bug magnet)[/magenta]" if defect.get("bug_magnet") else ""
+    window = f" in {defect['window']}" if defect.get("window") else ""
     console.print(
-        f"  [yellow]{defect.get('fix_count', 0)} bug fix(es)[/yellow], last "
+        f"  [yellow]{defect.get('fix_count', 0)} bug fix(es)[/yellow]{window}, last "
         f"{defect.get('last_fix_days_ago', '?')} day(s) ago{magnet}"
     )
     # ``top_symbols`` is a ``{name: fix_count}`` dict; iterating it bare drops the counts.

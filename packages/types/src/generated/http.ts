@@ -1315,6 +1315,10 @@ export interface CouplingNodeResponse {
   nloc?: number;
 }
 
+export interface CoverageAddRequest {
+  path: string;
+}
+
 /** One ingested report's repo-wide figures, as ``crud.load_coverage_history`` reads them. */
 export interface CoverageHistoryPoint {
   ingested_at: string;
@@ -1332,13 +1336,18 @@ export interface CoverageReportPaths {
   unmatched_sample: string[];
 }
 
-/** ``GET /health/coverage``. ``basis`` is absent when the graph was not consulted. */
+/**
+ * ``GET /health/coverage``. ``basis`` is absent when the graph was not consulted.
+ *
+ * ``unavailable`` means the graph walk failed, which is not the same as ``none``
+ * (no test files to walk from).
+ */
 export interface CoverageResponse {
   summary: CoverageSummary;
   files: Record<string, unknown>[];
   modules: Record<string, unknown>[];
   modules_total: number;
-  basis?: "measured" | "inferred" | "none" | null;
+  basis?: "measured" | "inferred" | "none" | "unavailable" | null;
   inferred?: Record<string, unknown> | null;
   history?: CoverageHistoryPoint[] | null;
 }
@@ -1605,6 +1614,8 @@ export interface DecisionRecordResponse {
   accepter?: string | null;
   accepter_kind?: string | null;
   accepter_session?: string | null;
+  blockers?: string[] | null;
+  decision_text_missing?: boolean;
 }
 
 /** The resolved decision capture policy for one repository. */
@@ -2206,6 +2217,7 @@ export interface FixStep {
   signature?: string | null;
   call?: string | null;
   command?: string | null;
+  notes?: string[];
 }
 
 export interface FixTarget {
@@ -2613,6 +2625,10 @@ export interface HealthWorkQueueResponse {
   limit?: number;
 }
 
+export interface HookToggle {
+  enabled: boolean;
+}
+
 export interface HotFilesGraphResponse {
   nodes: HotFilesNodeResponse[];
   links: GraphEdgeResponse[];
@@ -2943,6 +2959,21 @@ export interface NodeSearchResult {
 /** Acknowledgement for a mutation with nothing else to report. */
 export interface OkResponse {
   ok?: boolean;
+}
+
+export interface OnboardingPatch {
+  welcome_seen_repo?: string | null;
+  setup_pill_hidden?: boolean | null;
+  hosted_card_hidden?: boolean | null;
+}
+
+/** Per-machine onboarding state, plus the switches that hide hosted surfaces. */
+export interface OnboardingState {
+  welcome_seen?: Record<string, string>;
+  setup_pill_hidden?: boolean;
+  hosted_card_hidden?: boolean;
+  hints_enabled: boolean;
+  signed_in: boolean;
 }
 
 /** Every display name and canonical email folded into one person. */
@@ -3429,8 +3460,10 @@ export interface ProviderEntry {
   requires_key?: boolean;
   accepts_base_url?: boolean;
   local_server?: boolean;
+  local_model?: boolean;
   env_vars?: string[];
   setup_hint?: string;
+  detected?: "signed_in" | "installed" | "env" | "saved" | null;
 }
 
 export interface ProviderModelEntry {
@@ -4085,6 +4118,115 @@ export interface SetApiKeyRequest {
   repo_id?: string | null;
 }
 
+export interface SetupAgent {
+  id: string;
+  display_name: string;
+  tier?: string | null;
+  docs_url?: string | null;
+  installed: boolean;
+  connected: boolean;
+  registrations?: SetupRegistration[];
+  config_files?: Record<string, string[]>;
+  first_call_at?: string | null;
+  last_call_at?: string | null;
+}
+
+/** Every call to this repo's index, whichever agent made it. */
+export interface SetupCalls {
+  first_call_at?: string | null;
+  last_call_at?: string | null;
+  unattributed?: boolean;
+}
+
+export interface SetupCheck {
+  id: string;
+  name: string;
+  level: "ok" | "warn" | "fail";
+  detail?: string;
+  fix?: string | null;
+}
+
+export interface SetupCoverage {
+  ingested_at?: string | null;
+  configured_paths?: string[];
+  discovered?: SetupCoverageReport[];
+}
+
+export interface SetupCoverageReport {
+  path: string;
+  modified_at: string;
+  age_days: number;
+}
+
+export interface SetupFileChange {
+  path: string;
+  action: string;
+  scope: string;
+  reason?: string | null;
+}
+
+export interface SetupIndex {
+  state: "up_to_date" | "behind" | "incomplete";
+  indexed_commit?: string | null;
+  live_head?: string | null;
+  indexed_at?: string | null;
+  file_count?: number;
+  parse_error_count?: number;
+  parse_error_files?: string[];
+}
+
+export interface SetupModel {
+  docs_mode: "none" | "deterministic" | "llm";
+  active_provider?: string | null;
+  active_model?: string | null;
+  configured_providers?: string[];
+}
+
+export interface SetupRegistration {
+  method: string;
+  scope: string;
+  config_path: string;
+}
+
+export interface SetupResponse {
+  repo_id: string;
+  generated_at: string;
+  index: SetupIndex;
+  agents_available: boolean;
+  agents?: SetupAgent[];
+  calls_available: boolean;
+  calls: SetupCalls;
+  sync: SetupSync;
+  rewrite_hook: SetupRewriteHook;
+  coverage_available: boolean;
+  coverage: SetupCoverage;
+  model_available: boolean;
+  model: SetupModel;
+  checks_available: boolean;
+  checks?: SetupCheck[];
+  onboarding: OnboardingState;
+  writes_allowed: boolean;
+}
+
+export interface SetupRewriteHook {
+  state: "installed" | "not_installed" | "not_applicable" | "unknown";
+  detail?: string;
+}
+
+export interface SetupSync {
+  installed?: boolean | null;
+  detail?: string;
+}
+
+/** What a write did. ``ok`` is the command's own success. */
+export interface SetupWriteResponse {
+  ok: boolean;
+  command: string;
+  message?: string;
+  output?: string[];
+  files?: SetupFileChange[];
+}
+
 export interface SiloModule {
   module: string;
   owner: OwnerRef;
@@ -4199,6 +4341,12 @@ export interface SymbolResponse {
   fix_count?: number | null;
 }
 
+export interface TestImpactAggregate {
+  file_count: number;
+  ingested_commit?: string | null;
+  freshness: "current" | "stale" | "unknown";
+}
+
 export interface TestImpactAnalysis {
   status: "available" | "partial" | "degraded";
   stale: boolean;
@@ -4220,12 +4368,14 @@ export interface TestImpactCoverage {
   ingested_at?: string | null;
   source_format?: string | null;
   freshness: TestImpactFreshness;
+  aggregate?: TestImpactAggregate | null;
 }
 
 export interface TestImpactEvidence {
   basis: "measured" | "inferred";
   source_file: string;
   via: "coverage-map" | "call-graph" | "import-graph";
+  match?: "file" | null;
   source_format?: string | null;
 }
 
@@ -4281,6 +4431,8 @@ export interface TestRecommendation {
   bases: ("measured" | "inferred")[];
   source_files: string[];
   evidence: TestImpactEvidence[];
+  stale?: boolean;
+  stale_reason?: "test_file_missing" | "test_file_changed" | null;
 }
 
 export interface TransitiveEntry {
@@ -4412,22 +4564,29 @@ export interface WorkspaceActionsResponse {
   cross_repo: WorkspaceCrossRepoAction[];
 }
 
-/** Architecture-complexity metrics over the system graph (Phase 6). */
+/**
+ * Architecture-complexity metrics over the system graph (Phase 6).
+ *
+ * Every measured figure is ``None`` when there is no graph, or when its
+ * ``evidence`` is insufficient: nothing seen is not a 10/10.
+ */
 export interface WorkspaceArchitectureResponse {
   node_count?: number;
   structural_edge_count?: number;
-  propagation_cost?: number;
-  propagation_cost_pct?: number;
-  core_size?: number;
-  core_ratio?: number;
+  propagation_cost?: number | null;
+  propagation_cost_pct?: number | null;
+  core_size?: number | null;
+  core_ratio?: number | null;
   core_members?: string[];
-  cycle_count?: number;
+  cycle_count?: number | null;
+  cycle_count_capped?: boolean;
   conformance_violations?: number;
   architecture_type?: string;
-  score?: number;
+  score?: number | null;
   role_breakdown?: Record<string, number>;
   roles?: WorkspaceNodeArchitectureRole[];
   generated_at?: string;
+  evidence?: WorkspaceGraphEvidence | null;
 }
 
 export interface WorkspaceBlastRadiusResponse {
@@ -4440,6 +4599,8 @@ export interface WorkspaceBlastRadiusResponse {
   max_distance?: number;
   total_impacted?: number;
   unresolved_targets?: string[];
+  undetermined_targets?: string[];
+  evidence?: WorkspaceGraphEvidence | null;
 }
 
 export interface WorkspaceBreakingChange {
@@ -4523,7 +4684,10 @@ export interface WorkspaceConformanceResponse {
   violation_count?: number;
   cycle_count?: number;
   total_cycles?: number;
+  total_capped?: boolean;
   violating_repos?: string[];
+  cycles_determined?: boolean | null;
+  evidence?: WorkspaceGraphEvidence | null;
 }
 
 export interface WorkspaceConformanceViolation {
@@ -4565,6 +4729,7 @@ export interface WorkspaceContractEntry {
   service?: string | null;
   line?: number | null;
   symbol_id?: string | null;
+  origin?: string | null;
   meta?: Record<string, unknown>;
 }
 
@@ -4572,6 +4737,7 @@ export interface WorkspaceContractLinkEntry {
   contract_id: string;
   contract_type: string;
   match_type: string;
+  strategy?: string | null;
   confidence: number;
   provider_repo: string;
   provider_file: string;
@@ -4621,6 +4787,84 @@ export interface WorkspaceDependencyCycle {
   nodes?: string[];
   edge_ids?: string[];
   length?: number;
+  leg_kinds?: string[][];
+  async_legs?: number;
+}
+
+/**
+ * One evidence item: OpenSSF Scorecard check keys plus ``method`` and ``basis``.
+ *
+ * ``score`` is 0-10, -1 when inconclusive, ``None`` on a descriptive item.
+ * ``data`` holds the item's full figures; its keys depend on ``name``.
+ */
+export interface WorkspaceEstateCheck {
+  name: string;
+  score?: number | null;
+  reason: string;
+  details?: string[];
+  method: string;
+  basis: "measured" | "inferred" | "declared" | "unresolved" | "gated";
+  data?: Record<string, unknown> | null;
+  documentation?: WorkspaceEstateCheckDocs | null;
+}
+
+export interface WorkspaceEstateCheckDocs {
+  url: string;
+  short: string;
+}
+
+export interface WorkspaceEstateGenerator {
+  name: string;
+  version: string;
+  stamp: string;
+}
+
+export interface WorkspaceEstateRepo {
+  alias?: string | null;
+  name: string;
+  head_commit?: string | null;
+  last_snapshot?: WorkspaceEstateSnapshot | null;
+  indexed?: boolean;
+  index_state?: "behind" | "unreadable" | null;
+}
+
+/** ``GET /api/workspace/estate``: the estate report document. */
+export interface WorkspaceEstateResponse {
+  schema_version: number;
+  kind: "estate";
+  generated_at: string;
+  generator: WorkspaceEstateGenerator;
+  scope: WorkspaceEstateScope;
+  notice: string;
+  repos?: WorkspaceEstateRepo[];
+  sections?: WorkspaceEstateSection[];
+}
+
+export interface WorkspaceEstateScope {
+  kind: "workspace";
+  name: string;
+}
+
+export interface WorkspaceEstateSection {
+  id: string;
+  title: string;
+  summary: string;
+  repo?: string | null;
+  checks?: WorkspaceEstateCheck[];
+  failed?: boolean;
+}
+
+export interface WorkspaceEstateSnapshot {
+  taken_at: string;
+  stamp?: string | null;
+}
+
+/** One reason a graph's evidence is short of measured. */
+export interface WorkspaceEvidenceReason {
+  code: string;
+  state: string;
+  message: string;
+  subjects?: string[];
 }
 
 export interface WorkspaceExtractionDiagnostics {
@@ -4632,10 +4876,18 @@ export interface WorkspaceExtractionDiagnostics {
   unmatched_consumers?: WorkspaceUnmatchedConsumer[];
   unmatched_by_reason?: Record<string, number>;
   orphan_providers?: WorkspaceOrphanProvider[];
+  in_service_consumers?: WorkspaceUnmatchedConsumer[];
   providers_by_layer?: Record<string, number>;
   consumers_by_layer?: Record<string, number>;
   http_consumers_unresolved?: number;
   http_consumer_coverage?: number | null;
+  http_consumers_linked?: number | null;
+  http_link_coverage?: number | null;
+  unrecognised_call_files?: Record<string, number> | null;
+  unrecognised_call_file_count?: number | null;
+  topic_names_unresolved?: number;
+  unrecognised_message_files?: Record<string, number> | null;
+  unrecognised_message_file_count?: number | null;
   symbol_identity?: Record<string, WorkspaceSymbolIdentity>;
   schema_coverage?: WorkspaceSchemaCoverage;
   code_api?: WorkspaceCodeApiCoverage;
@@ -4650,13 +4902,31 @@ export interface WorkspaceGraphEdge {
   label?: string | null;
 }
 
+/**
+ * How much evidence the system graph rests on.
+ *
+ * Mirrors ``repowise.core.workspace.graph_evidence.GraphEvidence``. When
+ * ``determined`` is false, a score, cycle verdict or impact set over the
+ * graph would be vacuous and is reported as not determined.
+ */
+export interface WorkspaceGraphEvidence {
+  state: "measured" | "partial" | "insufficient";
+  determined: boolean;
+  summary?: string;
+  reasons?: WorkspaceEvidenceReason[];
+  services?: number;
+  runtime_edges?: number;
+  build_edges?: number;
+  providers?: number;
+  consumers?: number;
+}
+
 export interface WorkspaceGraphNode {
   repo_id: string;
   name: string;
   file_count?: number;
   coverage_pct?: number;
-  health_score?: number;
-  health_score_source?: string;
+  health_score?: number | null;
   top_language?: string;
 }
 
@@ -4687,6 +4957,21 @@ export interface WorkspaceImpactedNode {
   edge_kinds?: string[];
 }
 
+/**
+ * Links between two services, read from ``system_graph.json``, ``contracts.json``
+ * and ``cross_repo_edges.json``. The three are written together by one
+ * workspace update; ``stale_graph`` is true when the graph and the contracts
+ * record different repo heads, and rows may then be missing.
+ */
+export interface WorkspaceLinksBetweenResponse {
+  a: string;
+  b: string;
+  stale_graph?: boolean;
+  links: WorkspaceServiceLinkEntry[];
+  total: number;
+  totals: WorkspaceServiceLinksTotal[];
+}
+
 export interface WorkspaceNodeArchitectureRole {
   id: string;
   repo?: string;
@@ -4714,6 +4999,20 @@ export interface WorkspaceOrphanProvider {
   file_path: string;
   contract_id: string;
   contract_type: string;
+  other_files?: string[];
+}
+
+/** One manifest dependency of one repo on another, as ``cross_repo_edges.json`` stores it. */
+export interface WorkspacePackageDepEntry {
+  source_repo: string;
+  source_manifest?: string;
+  target_repo: string;
+  target_package?: string;
+  kind?: string;
+  target_manifest?: string;
+  requested_version?: string | null;
+  scope?: string;
+  resolution_basis?: string;
 }
 
 export interface WorkspaceRepoActions {
@@ -4733,6 +5032,7 @@ export interface WorkspaceRepoDiagnostics {
   providers_by_layer?: Record<string, number>;
   consumers_by_layer?: Record<string, number>;
   http_consumers_unresolved?: number;
+  topic_names_unresolved?: number;
 }
 
 export interface WorkspaceRepoEntry {
@@ -4745,6 +5045,7 @@ export interface WorkspaceRepoEntry {
   file_count?: number;
   symbol_count?: number;
   page_count?: number;
+  fresh_page_count?: number;
   doc_coverage_pct?: number;
   hotspot_count?: number;
   health_score?: number | null;
@@ -4782,6 +5083,35 @@ export interface WorkspaceSchemaCoverage {
   recovered_ratio_eligible?: number | null;
 }
 
+export interface WorkspaceServiceGroup {
+  id: string;
+  label: string;
+  source: string;
+  member_count?: number;
+}
+
+/**
+ * One piece of evidence behind an edge between two services.
+ *
+ * ``evidence`` says which of ``link``, ``package_dep`` or ``co_change`` is set.
+ */
+export interface WorkspaceServiceLinkEntry {
+  kind: string;
+  direction: "a_to_b" | "b_to_a" | "both";
+  evidence: "contract" | "package" | "co_change";
+  link?: WorkspaceContractLinkEntry | null;
+  provider_origin?: string | null;
+  consumer_origin?: string | null;
+  package_dep?: WorkspacePackageDepEntry | null;
+  co_change?: WorkspaceCoChangeEntry | null;
+}
+
+export interface WorkspaceServiceLinksTotal {
+  kind: string;
+  direction: "a_to_b" | "b_to_a" | "both";
+  count: number;
+}
+
 export interface WorkspaceSymbolIdentity {
   total?: number;
   bound?: number;
@@ -4815,6 +5145,17 @@ export interface WorkspaceSystemEdge {
   weight?: number;
   structural?: boolean;
   contract_refs?: string[];
+  strategy?: string | null;
+  family?: string | null;
+}
+
+/** ``GET /api/workspace/system-graph?view=map``: the graph without diagnostics. */
+export interface WorkspaceSystemGraphMapResponse {
+  version?: number;
+  generated_at?: string;
+  nodes?: WorkspaceSystemNode[];
+  edges?: WorkspaceSystemMapEdge[];
+  groups?: WorkspaceServiceGroup[];
 }
 
 export interface WorkspaceSystemGraphResponse {
@@ -4823,6 +5164,23 @@ export interface WorkspaceSystemGraphResponse {
   nodes?: WorkspaceSystemNode[];
   edges?: WorkspaceSystemEdge[];
   diagnostics?: WorkspaceExtractionDiagnostics;
+  groups?: WorkspaceServiceGroup[];
+}
+
+/** An edge of the map's lean view. Mirrors ``core.workspace.system_map_view``. */
+export interface WorkspaceSystemMapEdge {
+  id: string;
+  source: string;
+  target: string;
+  kind: string;
+  match_type: string;
+  confidence?: number;
+  weight?: number;
+  structural?: boolean;
+  contract_refs?: string[] | null;
+  strategy?: string | null;
+  family?: string | null;
+  ref_count?: number;
 }
 
 export interface WorkspaceSystemNode {
@@ -4837,6 +5195,7 @@ export interface WorkspaceSystemNode {
   is_orphan_provider?: boolean;
   is_orphan_consumer?: boolean;
   is_isolated?: boolean;
+  group?: string | null;
 }
 
 /** One consumer file the join looked at, and the state it ended in. */

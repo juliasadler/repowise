@@ -50,6 +50,22 @@ _CORPUS: tuple[tuple[str, str | None, str], ...] = (
     ("src/foo.test.mts", None, "test"),
     ("src/foo.spec.cts", None, "test"),
     ("src/foo.mts", None, ""),
+    # inside a JS-family `src` tree a `tests/` folder is a product feature unless
+    # the file name or another test dir says otherwise; outside `src` it is a
+    # suite, the way Mocha, AVA and `node --test` collect a whole folder
+    ("packages/web/src/app/repos/[id]/tests/page.tsx", None, ""),
+    ("packages/web/src/components/tests/tests-view.tsx", None, ""),
+    ("src/components/tests/TestsView.vue", None, ""),
+    ("Src/Tests/page.svelte", None, ""),
+    ("packages/web/tests/page.tsx", None, "test"),
+    ("src/components/tests/Button.test.tsx", None, "test"),
+    ("src/__tests__/tests/helpers.ts", None, "test"),
+    ("src/tests/__mocks__/api.ts", None, "support"),
+    ("web/src/test/setup.ts", None, "test"),
+    ("tests/foo.test.ts", None, "test"),
+    ("tests/utils.ts", None, "test"),
+    ("test/app.router.js", None, "test"),
+    ("pkg/src/tests/helpers.py", None, "test"),
     # maven / gradle / kotlin multiplatform
     ("src/test/java/Foo.java", None, "test"),
     ("src/it/scala/FooSpec.scala", None, "test"),
@@ -294,6 +310,12 @@ _CORPUS: tuple[tuple[str, str | None, str], ...] = (
     ("src/media-understanding/runner.test-mocks.ts", None, "support"),
     ("extensions/comfy/test-helpers.ts", None, "support"),
     ("src/cron/isolated-agent.test-setup.ts", None, "support"),
+    # #3269: a module's own ``.test-*`` companion, beside it in src/.
+    ("src/foo.test-support.ts", None, "support"),
+    ("src/foo.test-helpers.ts", None, "support"),
+    ("src/foo.test-utils.ts", None, "support"),
+    ("src/foo.test-utils.js", None, "support"),
+    ("src/test-supporter.ts", None, ""),
     # ``test-utils`` is a published entry in React and Preact; ``setup`` alone
     # is a build script or an app's bootstrap.
     ("src/test-utils.ts", None, ""),
@@ -358,6 +380,8 @@ def test_degenerate_paths_are_not_tests(path: str) -> None:
     [
         ("tests/x.py", True),
         ("src/__mocks__/api.ts", True),
+        ("packages/web/src/components/tests/tests-view.tsx", False),
+        ("pkg/src/tests/helpers.py", True),
         ("pkg/tests/helpers/db.py", True),
         ("packages/core/src/pkg/core/test_selection.py", False),
         ("src/bot.test-harness.ts", False),

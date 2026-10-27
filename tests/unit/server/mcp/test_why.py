@@ -313,6 +313,66 @@ async def test_get_why_module_path(setup_mcp):
 
 
 @pytest.mark.asyncio
+async def test_get_why_directory_origin_rolls_up_its_files(setup_mcp):
+    """A directory has no git row of its own; its files' rows are its history."""
+    from repowise.server.mcp_server import get_why
+
+    origin = (await get_why("src/"))["origin_story"]
+    assert origin["available"] is True
+    assert origin["scope"] == "directory"
+    assert origin["files_with_history"] == 2
+    assert (origin["first_commit"], origin["last_commit"]) == ("2025-01-01", "2026-03-15")
+    assert [c["sha"] for c in origin["key_commits"]] == ["abc1234", "def5678", "111aaa"]
+    # Per-file totals and owners do not add up to a directory's, so none is claimed.
+    assert "total_commits" not in origin and "primary_author" not in origin
+    assert "No git history" not in origin["summary"]
+
+
+@pytest.mark.asyncio
+async def test_get_why_target_cards_roll_up_a_directory(setup_mcp):
+    from repowise.server.mcp_server import get_why
+
+    result = await get_why(targets=["src/db", "src/auth/service.py"])
+    db = result["target_context"]["src/db"]["origin"]
+    assert db["scope"] == "directory"
+    assert db["files_with_history"] == 1
+    assert result["target_context"]["src/auth/service.py"]["origin"]["total_commits"] == 42
+
+
+def test_directory_origin_lists_a_shared_commit_once():
+    from types import SimpleNamespace
+
+    from repowise.server.mcp_server._directory import _build_directory_origin
+
+    shared = '[{"sha": "s1", "date": "2026-01-02", "message": "m", "author": "a"}]'
+    metas = [
+        SimpleNamespace(first_commit_at=None, last_commit_at=None, significant_commits_json=shared)
+        for _ in range(2)
+    ]
+    origin = _build_directory_origin("pkg", metas, [])
+    assert len(origin["key_commits"]) == 1
+    assert origin["first_commit"] == "unknown"
+    assert _build_directory_origin("pkg", [], [])["available"] is False
+
+
+def test_directory_rows_skip_excluded_files_and_sibling_prefixes():
+    from types import SimpleNamespace
+
+    import pathspec
+
+    from repowise.server.mcp_server._directory import _rows_under
+
+    rows = [
+        SimpleNamespace(file_path=p)
+        for p in ("src/db/models.py", "src/dbx/other.py", "src/db/vendor/lib.py")
+    ]
+    spec = pathspec.PathSpec.from_lines("gitwildmatch", ["vendor/"])
+    for query in ("src/db", "src/db/", "./src/db", r"src\db"):
+        assert [m.file_path for m in _rows_under(query, rows, spec)] == ["src/db/models.py"]
+    assert len(_rows_under(".", rows, None)) == 3
+
+
+@pytest.mark.asyncio
 async def test_get_why_path_surfaces_code_rationale(setup_mcp, tmp_path):
     """Ungoverned file whose 'why' lives in a code comment → code_rationale."""
     import repowise.server.mcp_server as mcp_mod
@@ -606,7 +666,7 @@ async def test_get_why_asks_git_about_the_top_record_only(session, setup_mcp, mo
 
     calls: list[tuple] = []
 
-    def _fake(root, *, created_at, nodes):
+    def _fake(root, *, created_at, nodes, evidence_commits=(), accepted_at=None):
         calls.append((root, tuple(nodes)))
         return "nothing in the 1 file it governs has changed since 2026-01-01"
 
@@ -791,6 +851,7 @@ async def test_get_why_targets_do_not_bind_a_record_whose_files_are_gone(session
             id=f"gone{flag}",
             repository_id=setup_mcp,
             title=f"Legacy rule {flag}",
+            decision="keep the legacy path",
             rationale="why",
             affected_files_json=json.dumps([path]),
             source="pr",

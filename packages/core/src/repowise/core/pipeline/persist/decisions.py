@@ -132,13 +132,15 @@ async def store_decisions(
     vector_store: Any = None,
     git_metadata: Iterable[Any] | None = None,
     provider: Any = None,
+    repo_path: Any = None,
 ) -> list[str]:
     """Upsert ``decisions``, then detect supersession and rescore staleness.
 
     Returns the ids the upsert touched. A failing upsert propagates; the two
     passes after it are best-effort. ``git_metadata`` holds per-file git rows
     (dicts or dataclasses) for the staleness rescore; ``provider`` enables
-    the LLM tiebreaker in supersession detection.
+    the LLM tiebreaker in supersession detection; ``repo_path`` lets the
+    rescore start from when each record's evidence commits landed.
     """
     from repowise.core.persistence.crud import (
         bulk_upsert_decisions,
@@ -186,7 +188,9 @@ async def store_decisions(
                 if fp:
                     git_meta_map[fp] = gm_dict
             if git_meta_map:
-                updated = await recompute_decision_staleness(session, repo_id, git_meta_map)
+                updated = await recompute_decision_staleness(
+                    session, repo_id, git_meta_map, repo_path
+                )
                 if updated:
                     logger.info("decision_staleness_recomputed", updated=updated)
         except Exception as _stale_err:

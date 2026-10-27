@@ -36,7 +36,6 @@ class TechStackItem:
 class KeyModule:
     name: str  # display name, e.g. "src/api"
     purpose: str  # short description (~80 chars)
-    file_count: int
     owner: str | None
 
 
@@ -46,15 +45,24 @@ class HotspotFile:
     churn_percentile: float
     commit_count_90d: int
     owner: str | None
-    # Bug-fix history for the same file. ``fix_count`` is the windowed
-    # production-code fix count (``GitMetadata.prior_defect_count``), and
-    # ``last_fix_date`` (``YYYY-MM-DD``) anchors it, because a count with no
-    # recency reads as an accusation about 2019; a date stays true between
-    # regenerations. ``bug_magnet`` is only ever set alongside a date, per the
-    # recency contract in ``types/health.ts``.
+    # Bug-fix history for the same file. ``fix_count`` is the production-code
+    # fix count over the prior-defect window (``GitMetadata.prior_defect_count``,
+    # see ``fix_window``), and ``last_fix_date`` (``YYYY-MM-DD``) anchors it,
+    # because a count with no recency reads as an accusation about 2019; a date
+    # stays true between regenerations. ``bug_magnet`` is only ever set
+    # alongside a date, per the recency contract in ``types/health.ts``.
     fix_count: int = 0
     bug_magnet: bool = False
     last_fix_date: str | None = None
+
+    @property
+    def fix_window(self) -> str:
+        """The window ``fix_count`` covers, as the line prints it ("6 months")."""
+        # Local import: the constants module loads the language registry, which
+        # the many tests that build these dataclasses directly do not need.
+        from repowise.core.ingestion.git_indexer._constants import PRIOR_DEFECT_WINDOW_LABEL
+
+        return PRIOR_DEFECT_WINDOW_LABEL
 
 
 @dataclass(frozen=True)

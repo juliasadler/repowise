@@ -198,7 +198,7 @@ async def upsert_decisions(ctx: FullUpdatePersist) -> None:
                 provider=ctx.provider,
             )
     if ctx.git_meta_map:
-        await recompute_decision_staleness(session, repo_id, ctx.git_meta_map)
+        await recompute_decision_staleness(session, repo_id, ctx.git_meta_map, ctx.repo_path)
 
 
 DECISION_STEPS: tuple[Step, ...] = (

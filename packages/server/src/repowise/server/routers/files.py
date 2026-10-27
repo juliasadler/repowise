@@ -14,15 +14,16 @@ import bisect
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from repowise.core.analysis.dead_code.deletion_gate import effective_safe_to_delete
+from repowise.core.analysis.dead_code.serving import is_safe, serve_findings
 from repowise.core.analysis.finding_registry import excluded_types, split_gated
 from repowise.core.analysis.health.aggregation import NLOC_NULL_REASON
 from repowise.core.analysis.health.signals import file_signals
 from repowise.core.analysis.health.trends import file_trend
+from repowise.core.analysis.patch_coverage import file_on_disk_freshness
 from repowise.core.attribution import attribution_enabled
 from repowise.core.ids import is_external
 from repowise.core.ingestion.models import FILE_DEPENDENCY_EDGE_TYPES
@@ -35,7 +36,7 @@ from repowise.core.persistence.models import (
     Page,
     WikiSymbol,
 )
-from repowise.server.deps import get_db_session, verify_api_key
+from repowise.server.deps import cross_repo_cut_inputs, get_db_session, verify_api_key
 from repowise.server.mcp_server._graph_utils import parse_community_meta
 from repowise.server.routers.code_health import (
     _file_signals_to_dict,
@@ -235,6 +236,7 @@ async def files_index(
 async def file_detail(
     repo_id: str,
     file_path: str,
+    request: Request,
     fields: str = Query(
         "full",
         description="How much of each block to return. 'full' (the default) is "
@@ -365,6 +367,11 @@ async def file_detail(
     if coverage_rows:
         coverage = crud.coverage_row_dict(coverage_rows[0], include_covered_lines=not slim)
         coverage.setdefault("covered_lines", [])
+        # The file page shows the source on disk; covered line numbers from
+        # another version of it would tint the wrong lines.
+        coverage["freshness"] = await file_on_disk_freshness(
+            repo.local_path, coverage["ingested_commit_sha"], file_path
+        )
 
     # --- Graph context ------------------------------------------------------
     graph: dict | None = None
@@ -492,11 +499,9 @@ async def file_detail(
             "confidence": f.confidence,
             "reason": f.reason,
             "lines": f.lines,
-            "safe_to_delete": effective_safe_to_delete(
-                f.confidence, f.file_path, f.safe_to_delete, f.kind
-            ),
+            "safe_to_delete": is_safe(f),
         }
-        for f in dead_rows
+        for f in serve_findings(dead_rows, **cross_repo_cut_inputs(request, repo_id))
     ]
 
     return {

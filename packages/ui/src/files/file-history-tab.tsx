@@ -20,7 +20,7 @@ import { FileMark } from "./file-marks";
 
 /** Matches `FixHistoryBadge`'s default tooltip — same claim, same wording. */
 const FIX_HISTORY_TITLE =
-  "Bug-fix commits that touched this file in the trailing defect window.";
+  "Bug-fix commits that touched this file in the last 6 months.";
 
 interface FileHistoryTabProps {
   git: FileDetailGit | null;

@@ -64,14 +64,7 @@ _TABLE_CANDIDATES = 10
 def _resolve_repo_path(path: str | None, fmt: str):
     """Resolve the repo path (workspace-aware), mirroring ``coverage``."""
     target = resolve_command_target(path=path)
-    target.notice(ci_notices(fmt), command="impacted-tests")
-    if target.is_workspace:
-        primary = target.primary_path()
-        if primary is None:
-            raise click.ClickException("Workspace has no primary repo configured.")
-        return primary
-    assert target.repo_path is not None
-    return target.repo_path
+    return target.narrow(ci_notices(fmt), command="impacted-tests", repo_option=False)
 
 
 @click.command("impacted-tests")
@@ -312,6 +305,22 @@ def _args_header(selection, args: list[str], resolved: str, prioritize: bool) ->
         )
     if selection.run_all:
         return "Run every test:"
+    apart = []
+    if selection.broadcast:
+        apart.append(
+            f"{len(selection.broadcast)} only because a conftest on a route keeps every "
+            "test under it"
+        )
+    if selection.import_closure:
+        apart.append(
+            f"{len(selection.import_closure)} only through imports, with no call path to "
+            "the change"
+        )
+    if apart:
+        return (
+            f"{len(args)} argument(s) for {resolved}; selected test files that must still run "
+            f"but are counted apart: {'; '.join(apart)}."
+        )
     return f"{len(args)} argument(s) for {resolved}."
 
 

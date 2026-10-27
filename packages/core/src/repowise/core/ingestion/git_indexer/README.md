@@ -173,7 +173,7 @@ and a per-file rollup on `git_metadata` (`agent_commit_count`,
 | Module | Contents |
 |--------|----------|
 | `tiers.py` | `GitIndexTier` enum + `includes_blame` / `includes_co_change` |
-| `_constants.py` | commit-depth defaults, decay half-lives, the bug-fix keyword classifier (`is_fix_commit`, mirrors the benchmark) + `PRIOR_DEFECT_WINDOW_DAYS`, skip heuristics |
+| `_constants.py` | commit-depth defaults, decay half-lives, the bug-fix keyword classifier (`is_fix_commit`, mirrors the benchmark) + `PRIOR_DEFECT_WINDOW_DAYS` and the `PRIOR_DEFECT_WINDOW_LABEL` every fix count prints beside it, skip heuristics |
 | `records.py` | `_CommitRec`, `GitIndexSummary` (carries `commit_rows`), the `git log` record format + rename/skip path helpers |
 | `commit_rows.py` | `build_commit_rows` — per-commit Kamei features + change-risk from the walk's sunk commits (pure, in-memory author experience) |
 | `agent_provenance.py` | `AgentProvenanceClassifier` — deterministic per-commit agent attribution (local channels, config-extensible) |

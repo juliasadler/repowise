@@ -39,7 +39,7 @@ from repowise.core.analysis.health.models import split_by_origin
 from repowise.core.analysis.health.ranking import deduction_by_path
 from repowise.core.analysis.health.rows import detail_map, split_unscored
 from repowise.core.analysis.health.scope import DEFAULT_SCOPE, SCOPES, parse_scope
-from repowise.core.analysis.health.scoring import compute_kpis
+from repowise.core.analysis.health.scoring import ADVISORY_DIMENSION, compute_kpis
 from repowise.core.analysis.health.signals import HISTORY_MIN_COMMITS
 from repowise.core.persistence.crud.analysis.health import open_finding_count
 
@@ -51,6 +51,7 @@ from .persist import (
     _load_queue_counts,
     _load_recommendations,
     _load_short_history,
+    _load_stored_analyzer_version,
     _load_stored_report,
     _persist_health,
 )
@@ -346,6 +347,11 @@ class _Options:
     trend_view: bool
 
     @property
+    def live(self) -> bool:
+        """The report is analysed in-process rather than read from the index."""
+        return self.recompute or self.generate_code is not None
+
+    @property
     def controls_set(self) -> bool:
         """``--scope`` or ``--counts`` asks for other than the stored reading."""
         return (
@@ -380,19 +386,7 @@ def _resolve_repo_path(
     target = resolve_command_target(
         path=path, no_workspace_flag=no_workspace, repo_alias=repo_alias
     )
-    target.notice(status, command="health")
-    if not target.is_workspace:
-        assert target.repo_path is not None
-        return target.repo_path
-    if target.repo_filter is not None:
-        picked = target.resolve_repo_alias(target.repo_filter)
-        if picked is None:
-            raise click.ClickException(f"Unknown repo alias: {target.repo_filter}")
-        return picked
-    primary = target.primary_path()
-    if primary is None:
-        raise click.ClickException("Workspace has no primary repo configured.")
-    return primary
+    return target.narrow(status, command="health")
 
 
 def _render_stored_view(repo_path: Path, status: Any, opts: _Options) -> bool:
@@ -434,7 +428,7 @@ def _render_stored_view(repo_path: Path, status: Any, opts: _Options) -> bool:
 
 def _load_report(repo_path: Path, opts: _Options) -> tuple[Any, set[str], dict[str, str]]:
     """``(report, hotspot paths, language by path)``, recomputed or as stored."""
-    if opts.recompute or opts.generate_code is not None:
+    if opts.live:
         # Written back only for a whole-repo table: json/md are read by scripts
         # and CI, and a file or module run is an inspection, not repo state.
         return _recompute_report(
@@ -509,12 +503,21 @@ def _scoped_suggestions(report: Any, opts: _Options) -> list[Any]:
 def _render_json(
     repo_path: Path, report: Any, metrics_sorted: list[Any], findings: list[Any], opts: _Options
 ) -> None:
+    from repowise.core.analysis.health import HEALTH_ANALYZER_VERSION
+
     excluded = excluded_types()
     short_history = _load_short_history(repo_path)
     click.echo(
         json.dumps(
             {
                 "kpis": report.kpis,
+                # Which scoring produced these numbers: a score that moves
+                # across a version change may not mean the code changed.
+                "analyzer_version": (
+                    HEALTH_ANALYZER_VERSION
+                    if opts.live
+                    else _load_stored_analyzer_version(repo_path)
+                ),
                 "scope": parse_scope(opts.scope),
                 "counts": parse_counts(opts.counts),
                 # Findings, causes, plans and Fix first items, as every
@@ -604,33 +607,45 @@ def _render_headline(kpis: dict[str, Any], code_shape: bool, unanalysed: int) ->
         BAND_LABEL,
         BAND_TERMINAL_COLOR,
         analysed_note,
+        band_for,
         headline_band,
+        headline_scope,
     )
 
+    share = kpis.get("analysed_share")
+    analysed = kpis.get("file_count") or 0
+    unanalysed_count = kpis.get("unanalysed_file_count") or 0
+    # A minority-analysed score never prints bare: its coverage rides beside it.
+    scope = headline_scope(analysed, unanalysed_count)
+
+    def banded(label: str, score: Any, band: str | None) -> str:
+        # Every score printed carries its band, so a Fair figure never sits
+        # unlabelled beside a Good one.
+        tag = ""
+        if band is not None:
+            color = BAND_TERMINAL_COLOR[band]
+            tag = f" [[{color}]{BAND_LABEL[band]}[/{color}]]"
+        return f"{label}: [bold]{score if score is not None else '?'}[/bold]/10{tag}"
+
     avg = kpis.get("average_health")
-    band_str = ""
-    band = headline_band(avg, kpis.get("analysed_share"))
-    if band is not None:
-        band_color = BAND_TERMINAL_COLOR[band]
-        band_str = f" [[{band_color}]{BAND_LABEL[band]}[/{band_color}]]"
+    avg_band = headline_band(avg, share)
+    parts = [banded("Code health", avg, avg_band) + (f" {scope}" if scope else "")]
     # Production code beside the all-files figure, while tests are in it.
     production = kpis.get("production_average")
     has_tests = (kpis.get("production_file_count") or 0) < (kpis.get("file_count") or 0)
-    production_str = (
-        f"Production code: [bold]{production}[/bold]/10 · "
-        if production is not None and has_tests
-        else ""
-    )
+    if production is not None and has_tests:
+        parts.append(banded("Production code", production, headline_band(production, share)))
     # A repo with no recent churn has no hotspots, so no hotspot figure.
     hotspot = kpis.get("hotspot_health")
-    hotspot_str = f"Hotspot: [bold]{hotspot}[/bold]/10 · " if hotspot is not None else ""
-    console.print(
-        f"\nCode health: [bold]{avg if avg is not None else '?'}[/bold]/10{band_str} · "
-        f"{production_str}"
-        f"{hotspot_str}"
-        f"Worst: [bold]{kpis.get('worst_performer_score') or '?'}[/bold]/10 "
-        f"({kpis.get('worst_performer_path') or 'n/a'})"
+    if hotspot is not None:
+        parts.append(banded("Hotspot", hotspot, headline_band(hotspot, share)))
+    # One file's score takes the file's band, withheld with the headline's.
+    worst = kpis.get("worst_performer_score")
+    parts.append(
+        banded("Worst", worst, band_for(worst) if worst is not None and avg_band else None)
+        + f" ({kpis.get('worst_performer_path') or 'n/a'})"
     )
+    console.print("\n" + " · ".join(parts))
     if code_shape:
         console.print("[dim]Counting code shape only. Change history is left out.[/dim]")
     if unanalysed:
@@ -639,8 +654,8 @@ def _render_headline(kpis: dict[str, Any], code_shape: bool, unanalysed: int) ->
             "their language yet.[/dim]"
         )
     # The share behind the headline, from the same counts as its band.
-    note = analysed_note(kpis.get("file_count") or 0, kpis.get("unanalysed_file_count") or 0)
-    if note:
+    note = analysed_note(analysed, unanalysed_count)
+    if note and not scope:
         console.print(f"[dim]Code health {note}.[/dim]")
 
 
@@ -658,7 +673,7 @@ def _render_files_table(metrics_sorted: list[Any], short_history: set[str]) -> N
         score_color = BAND_TERMINAL_COLOR[band_for(m.score)]
         table.add_row(
             m.file_path,
-            f"[{score_color}]{m.score:.1f}[/{score_color}]"
+            f"[{score_color}]{m.score:.2f}[/{score_color}]"
             + ("*" if m.file_path in short_history else ""),
             str(m.max_ccn),
             str(m.max_nesting),
@@ -673,27 +688,38 @@ def _render_files_table(metrics_sorted: list[Any], short_history: set[str]) -> N
         )
 
 
+def _is_advisory(finding: Any) -> bool:
+    return getattr(finding, "dimension", None) == ADVISORY_DIMENSION
+
+
 def _render_findings_table(findings: list[Any]) -> None:
     if not findings:
         return
-    # The total get_overview prints; advisory rows are listed, not counted.
-    console.print(f"\n[bold]{open_finding_count(findings)}[/bold] open findings:")
+    # The total get_overview prints. Advisory rows deduct nothing, so they are
+    # listed after the counted ones and marked, never counted.
+    counted = open_finding_count(findings)
+    advisory = len(findings) - counted
+    header = f"\n[bold]{counted}[/bold] open findings"
+    if advisory:
+        header += f" [dim](+{advisory} advisory, not scored)[/dim]"
+    console.print(header + ":")
+    listed = sorted(findings, key=_is_advisory)[:30]
     f_table = Table()
     f_table.add_column("Severity", style="magenta")
     f_table.add_column("Marker", style="cyan")
     f_table.add_column("File")
     f_table.add_column("Function")
     f_table.add_column("Impact", justify="right")
-    for f in findings[:30]:
+    for f in listed:
         f_table.add_row(
             str(f.severity),
             f.biomarker_type,
             f.file_path,
             f.function_name or "-",
-            f"-{f.health_impact:.2f}",
+            "[dim]advisory[/dim]" if _is_advisory(f) else f"-{f.health_impact:.2f}",
         )
     console.print(f_table)
-    for line in preview_lines("health", findings[:30], kind="biomarker_type"):
+    for line in preview_lines("health", listed, kind="biomarker_type"):
         console.print(f"[dim]{line}[/dim]")
 
 

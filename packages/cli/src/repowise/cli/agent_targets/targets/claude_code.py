@@ -473,10 +473,13 @@ class ClaudeCodeTarget:
             from repowise.cli.editor_integrations.claude_config import (
                 claude_code_local_settings_path,
                 set_repo_coverage_hook,
+                set_repo_health_gate_hook,
             )
 
-            # The coverage re-ingest entries `coverage add` / init / update wrote.
-            if set_repo_coverage_hook(repo_path, False) is not None:
+            # The coverage re-ingest entries `coverage add` / init / update wrote,
+            # and the health-gate entry `hook health-gate install` wrote.
+            coverage = set_repo_coverage_hook(repo_path, False)
+            if (set_repo_health_gate_hook(repo_path, False) or coverage) is not None:
                 result.record(claude_code_local_settings_path(repo_path), FileAction.REMOVED)
             return result
 
@@ -607,11 +610,11 @@ class ClaudeCodeTarget:
             )
 
         duplicates = [r for r in registrations if r.method == "plugin"] and [
-            r for r in registrations if r.method == "direct"
+            r for r in registrations if r.method == "direct" and r.detail != "desktop"
         ]
         if duplicates:
             issues.append(
-                "repowise is registered twice — once by the plugin and once directly — "
+                "repowise is registered twice, once by the plugin and once directly, "
                 "so its MCP tool schemas and hooks are loaded twice."
             )
 
@@ -619,6 +622,8 @@ class ClaudeCodeTarget:
         # copy of the hooks, so updating it can resolve the matcher issue above
         # as a side effect, where repairing the matcher does nothing for it.
         fix_command = "repowise hook rewrite install"
+        if duplicates:
+            fix_command = "repowise agents remove --target=claude-code"
         skew = plugin_version_skew()
         if skew:
             from repowise.cli import __version__

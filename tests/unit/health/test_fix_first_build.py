@@ -612,6 +612,54 @@ def test_a_finding_whose_plan_is_below_the_worth_floor_leads_with_that_plan() ->
     )
 
 
+def _object_plans(**obj_over) -> list:
+    """A staged plan whose first stage reads three values off ``ctx``."""
+    plans = _staged_plans()
+    body = plans[0]["plan"]
+    body["params"] = ["ctx", "rows"]
+    body["new_symbol"] = {
+        "signature_text": "def sum_rows(ctx: _RunContext, rows):",
+        "notes": ["Read a, b, limit in the helper as ctx.a, ctx.b, ctx.limit."],
+    }
+    body["call_site"] = {"new_text": "total = sum_rows(ctx, rows)"}
+    body["parameter_object"] = {
+        "name": "_RunContext", "var": "ctx",
+        "declaration_text": "@dataclass(frozen=True)\nclass _RunContext:\n    a: int",
+        "construct_text": "ctx = _RunContext(a=a, b=b, limit=limit)",
+        "notes": ["Import dataclass from dataclasses."],
+        **obj_over,
+    }
+    return plans
+
+
+def test_a_step_reading_the_parameter_object_declares_and_builds_it() -> None:
+    # Without them the call names a variable and a type that do not exist.
+    core = next(i for i in _build(plans=_object_plans()).items if i.kind == "refactor")
+    step = core.action.steps[0]
+    assert step.signature == (
+        "@dataclass(frozen=True)\nclass _RunContext:\n    a: int\n\n"
+        "def sum_rows(ctx: _RunContext, rows):"
+    )
+    assert step.call == "ctx = _RunContext(a=a, b=b, limit=limit)\ntotal = sum_rows(ctx, rows)"
+    assert step.notes == (
+        "Add the _RunContext declaration above the helper, and the line building ctx just before "
+        "the call, as shown.",
+        "Import dataclass from dataclasses.",
+        "Read a, b, limit in the helper as ctx.a, ctx.b, ctx.limit.",
+    )
+    # The compact row stays the edit only.
+    assert set(core.compact()["first_step"]) == {"action", "line"}
+
+
+def test_a_step_whose_parameter_object_cannot_be_written_is_not_offered() -> None:
+    queue = _build(plans=_object_plans(declaration_text=None))
+    assert "refac2_big" not in {p for i in queue.items for p in i.source.plan_ids}
+    plans = _object_plans(construct_text="")
+    plans[0].update(file_path="src/core.py", target_symbol="src/core.py::run")
+    lone = _build(plans=plans, refactoring=[], performance=[]).lead
+    assert lone.action.steps[0].call is None
+
+
 def test_a_staged_plan_leading_a_finding_names_its_helpers() -> None:
     run = _run(*_hidden_plan(_staged_plans()))
     assert run.title == "Split run into 3 helpers"

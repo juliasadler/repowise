@@ -59,6 +59,14 @@ const BY_CATEGORY: Record<BiomarkerCategory, PlainIssue> = {
     title: "Risky SQL",
     why: "The query is hard to reason about or can touch more rows than meant.",
   },
+  apex: {
+    title: "Apex security or test risk",
+    why: "It can expose records, break in another org, or depend on org data.",
+  },
+  cobol: {
+    title: "Jump out of structured flow",
+    why: "Where control goes next has to be traced by hand.",
+  },
 };
 
 const BY_BIOMARKER: Record<string, PlainIssue> = {
@@ -101,6 +109,10 @@ const BY_BIOMARKER: Record<string, PlainIssue> = {
   untested_hotspot: {
     title: "Changes often and is untested",
     why: "Frequent edits with nothing to catch a mistake.",
+  },
+  untested_complexity: {
+    title: "Complex and little tested",
+    why: "Many paths through it, and few of them run under test.",
   },
   prior_defect: {
     title: "Fixed for bugs often",

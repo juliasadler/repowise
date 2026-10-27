@@ -23,6 +23,7 @@ from repowise.core.persistence.models import (
     GraphNode,
     HealthFileMetric,
     Page,
+    WikiSymbol,
 )
 from tests.unit.server.conftest import (
     assert_payload_golden,
@@ -60,6 +61,21 @@ async def _seed_index(session_factory, repo_id: str) -> None:
                     created_at=_CLOCK,
                 )
             )
+            # The symbol index the stat strip counts, matching each file's count.
+            for j in range(i + 2):
+                session.add(
+                    WikiSymbol(
+                        id=f"ws{i}_{j}",
+                        repository_id=repo_id,
+                        file_path=path,
+                        symbol_id=f"{path}::sym{j}",
+                        name=f"sym{j}",
+                        qualified_name=f"sym{j}",
+                        kind="function",
+                        created_at=_CLOCK,
+                        updated_at=_CLOCK,
+                    )
+                )
         for i, (path, owner, hotspot, churn) in enumerate(
             [
                 ("src/core.py", "Alice", True, 0.95),

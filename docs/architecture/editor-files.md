@@ -127,7 +127,7 @@ only the queries the chosen sections render. Both templates include the shared
 | `architecture` | on | First 4 sentences from the `repo_overview` wiki page | 4 sentences |
 | `key_modules` | on | `module_page` pages by PageRank desc | Top 10 |
 | `entry_points` | on | The curated `kg_project_meta` list, else `is_entry_point` nodes ranked on execution-start evidence | Top 6 |
-| `hotspots` | on | `git_metadata` bug magnets and hotspots, fix history first, with the last fix date | Top 5 |
+| `hotspots` | on | `git_metadata` bug magnets and hotspots, fix history first: the 6-month fix count with the last fix date | Top 5 |
 | `health` | on | Health score, band and worst file | 1 line |
 | `code_health` | off | Every health signal (replaces `health`) | 1 line |
 | `fix_first` | off | The Fix-first queue | Top 3 |

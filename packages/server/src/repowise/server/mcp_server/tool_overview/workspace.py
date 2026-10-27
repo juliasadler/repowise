@@ -8,6 +8,7 @@ from sqlalchemy import func as sa_func
 from sqlalchemy import select
 
 from repowise.core.ingestion.languages.registry import REGISTRY
+from repowise.core.persistence.crud import count_symbols
 from repowise.core.persistence.crud.analysis.health.metrics import count_health_files
 from repowise.core.persistence.database import get_session
 from repowise.core.persistence.models import GraphNode
@@ -62,7 +63,7 @@ async def _repo_entry(ctx: Any, registry: Any) -> dict[str, Any]:
             "path": str(ctx.path),
             "summary": _lead_sentence(ov_content),
             "code_files": await _code_files(session, repo_obj.id),
-            "symbol_count": await _count_nodes(session, repo_obj.id, "symbol"),
+            "symbol_count": await count_symbols(session, repo_obj.id),
             "is_default": registry is not None and ctx.alias == registry.get_default_alias(),
         }
 
@@ -98,18 +99,6 @@ async def _code_files(session: Any, repository_id: str) -> int:
             GraphNode.repository_id == repository_id,
             GraphNode.node_type == "file",
             GraphNode.language.in_(REGISTRY.code_languages()),
-        )
-    )
-    return result.scalar_one()
-
-
-async def _count_nodes(session: Any, repository_id: str, node_type: str) -> int:
-    result = await session.execute(
-        select(sa_func.count())
-        .select_from(GraphNode)
-        .where(
-            GraphNode.repository_id == repository_id,
-            GraphNode.node_type == node_type,
         )
     )
     return result.scalar_one()

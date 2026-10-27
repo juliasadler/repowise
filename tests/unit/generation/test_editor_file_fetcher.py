@@ -196,6 +196,15 @@ async def test_fetch_repo_name(session, repo, tmp_path):
     assert data.repo_name == "test-repo"
 
 
+async def test_fetch_indexed_at_is_the_sync_date_not_today(session, repo, tmp_path):
+    # A re-render without a sync (a rebase hook, `repowise claude-md`) must
+    # keep the date the index last synced.
+    repo.updated_at = datetime(2026, 10, 18, 23, 30, tzinfo=UTC)
+    await session.flush()
+    data = await EditorFileDataFetcher(session, repo.id, tmp_path).fetch()
+    assert data.indexed_at == "2026-10-18"
+
+
 async def test_fetch_architecture_summary(session, repo, tmp_path):
     content = (
         "## Overview\n\n"

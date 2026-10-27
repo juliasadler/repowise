@@ -13,7 +13,6 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +67,7 @@ from repowise.core.decision_lanes import record_decision_lanes
 from repowise.core.docs_mode import docs_mode_state_fields
 from repowise.core.generation.styles import DEFAULT_STYLE
 from repowise.core.index_scope import MODEL_COMMAND
+from repowise.core.workspace.update import stamp_workspace_entry
 
 from ._exit import COST_UNCONFIRMED_BUILT, exit_on_gaps
 from ._ingest import structural_generation_config
@@ -396,8 +396,7 @@ def _ingest_and_generate_repo(repo: Any, idx: int, total: int, ctx: _WorkspaceCt
 
     entry = ctx.ws_config.get_repo(repo.alias)
     if entry is not None:
-        entry.indexed_at = datetime.now(UTC).isoformat()
-        entry.last_commit_at_index = head
+        stamp_workspace_entry(entry, repo.path, head)
 
     write_editor_project_files(
         console,

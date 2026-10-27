@@ -61,7 +61,6 @@ def _query_repo_counts(repo_path: Path) -> tuple[int, int]:
     """Return ``(file_count, symbol_count)`` from a repo's DB."""
 
     async def _query() -> tuple[int, int]:
-        from sqlalchemy import func as sa_func
         from sqlalchemy import select as sa_select
 
         from repowise.core.persistence import (
@@ -69,7 +68,8 @@ def _query_repo_counts(repo_path: Path) -> tuple[int, int]:
             create_session_factory,
             get_session,
         )
-        from repowise.core.persistence.models import GraphNode, Repository
+        from repowise.core.persistence.crud import count_files, count_symbols
+        from repowise.core.persistence.models import Repository
 
         url = get_db_url_for_repo(repo_path)
         # Without this a store one repowise older reports 0 files / 0 pages:
@@ -87,26 +87,9 @@ def _query_repo_counts(repo_path: Path) -> tuple[int, int]:
                 if repo_id is None:
                     return 0, 0
 
-                # Count file nodes and symbol nodes
-                file_count_result = await session.execute(
-                    sa_select(sa_func.count())
-                    .select_from(GraphNode)
-                    .where(
-                        GraphNode.repository_id == repo_id,
-                        GraphNode.node_type == "file",
-                    )
-                )
-                symbol_count_result = await session.execute(
-                    sa_select(sa_func.count())
-                    .select_from(GraphNode)
-                    .where(
-                        GraphNode.repository_id == repo_id,
-                        GraphNode.node_type == "symbol",
-                    )
-                )
                 return (
-                    file_count_result.scalar_one(),
-                    symbol_count_result.scalar_one(),
+                    await count_files(session, repo_id),
+                    await count_symbols(session, repo_id),
                 )
         finally:
             await engine.dispose()
@@ -495,10 +478,13 @@ def _workspace_rows(target: CommandTarget) -> list[dict]:
     each consumer branch on ``indexed`` before it may read a field.
     """
     from repowise.core.workspace import check_repo_staleness
+    from repowise.core.workspace.update import sync_workspace_state_from_disk
 
     ws_root = target.ws_root
     ws_config = target.ws_config
     assert ws_root is not None and ws_config is not None
+    # A member updated on its own leaves the config behind its store.
+    sync_workspace_state_from_disk(ws_root, ws_config, save_if_changed=False)
 
     rows: list[dict] = []
     for entry in ws_config.repos:

@@ -122,6 +122,9 @@ class FixStep:
     call: str | None = None
     #: The command that checks this step, when it differs from the item's.
     command: str | None = None
+    #: What the helper's code cannot say, in the plan's words: a type a guard
+    #: narrows, a parameter object to declare, the values read off it.
+    notes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

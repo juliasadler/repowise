@@ -8,13 +8,16 @@ from typing import TYPE_CHECKING, Any
 
 from ...ingestion.git_indexer.function_blame import BlameIndex
 from ...ingestion.package_roots import module_for as _module_for
+from ..execution_graph import file_of_symbol
 from ..graph_view import HasEdge
+from ..test_reach.type_only import is_type_only, may_be_type_only
 from .asserts.lexicon import AssertVocabulary
 from .biomarkers import FileContext, detect_all
 from .biomarkers.base import BiomarkerResult
 from .biomarkers.function_hotspot import refresh_replayed
 from .complexity import FileComplexity, FunctionComplexity
 from .complexity.languages import has_health_dialect
+from .coverage_actions import nearest_test_file
 from .dataflow import FileDataflowCache
 from .duplication import ClonePair, DuplicationReport
 from .finding_identity import SYMBOL_INDEX_KEY, SYMBOL_KEY, SYMBOL_LINE_KEY
@@ -27,6 +30,7 @@ from .scoring import attach_impacts, file_score_fields, remap_severities, score_
 from .source_reader import SourceReader
 
 if TYPE_CHECKING:
+    from ..function_test_map import FunctionTests, MappedTest
     from .engine import HealthAnalyzer
 
 #: Function facts a finding inside the function carries in its details.
@@ -220,7 +224,11 @@ class FileEvaluator:
     active_contributors: int | None = None
     file_scc_index: dict[str, tuple[str, ...]] | None = None
     methods_by_file: dict[str, tuple[str, ...]] | None = None
+    split_partial_types: dict[str, frozenset[str]] | None = None
     dataflow_cache: FileDataflowCache | None = None
+    function_tests: FunctionTests | None = None
+    #: Test files by file name (``coverage_actions.paired_test_index``).
+    paired_test_files: dict[str, list[str]] | None = None
 
     def evaluate(
         self, pf: Any, fcx: FileComplexity
@@ -274,6 +282,7 @@ class FileEvaluator:
             or pf.file_info.is_test
             or fcx.has_inline_tests,
             is_test=bool(pf.file_info.is_test),
+            code_origin=self._code_origin(pf),
             # Separate from has_test_file (import or name pairing) so each signal stays visible.
             reached_by_tests=file_path in analyzer.test_index.reached_files(),
             module=_module_for(file_path, self.package_roots),
@@ -287,12 +296,16 @@ class FileEvaluator:
             branch_coverage_pct=cov.get("branch_coverage_pct") if cov else None,
             covered_lines=set(cov.get("covered_lines") or ()) if cov else set(),
             total_coverable_lines=int(cov.get("total_coverable_lines", 0)) if cov else 0,
+            coverable_lines=set(cov.get("coverable_lines") or ()) if cov else set(),
             reexport_only=bool(cov)
             and is_reexport_only(pf, bool(fcx.functions), analyzer.read_source),
+            type_only=bool(file_git_meta.get("is_hotspot"))
+            and _declares_only_types(file_path, pf, analyzer.read_source),
             clones=list(clones),
             duplication_pct=dup_pct,
             clone_sources=clone_sources,
             graph_view=self.graph_view,
+            split_partial_types=(self.split_partial_types or {}).get(file_path, frozenset()),
             blame_index=blame_idx_obj if isinstance(blame_idx_obj, BlameIndex) else None,
             repo_function_mod_p80=self.function_mod_p80,
             repo_active_contributors_90d=self.active_contributors,
@@ -300,7 +313,40 @@ class FileEvaluator:
             perf_hits=fcx.perf_hits,
             io_boundary_names=set(fcx.io_boundary_names),
             cross_file_oracle_lines=frozenset(getattr(fcx, "cross_file_oracles", ())),
+            **self._nearest_tests(pf, fcx),
         )
+
+    def _nearest_tests(self, pf: Any, fcx: FileComplexity) -> dict[str, Any]:
+        """Each function's nearest test (hops and file), and the file's own test."""
+        if pf.file_info.is_test:
+            return {}
+        path = pf.file_info.path
+        nearest = self._function_tests(path, fcx)
+        hops = {line: test.hops for line, test in nearest.items()}
+        files = {line: file_of_symbol(test.selector) for line, test in nearest.items()}
+        closest = min(nearest.values(), key=lambda t: t.hops, default=None)
+        return {
+            "function_test_hops": hops,
+            "function_test_files": files,
+            "file_test": nearest_test_file(
+                path, closest.selector if closest else None, self.paired_test_files
+            ),
+        }
+
+    def _function_tests(self, path: str, fcx: FileComplexity) -> dict[int, MappedTest]:
+        """Each function's start line to the nearest test that reaches it."""
+        if not self.function_tests:
+            return {}
+        index = self.analyzer._execution_graph()
+        if index is None:
+            return {}
+        out: dict[int, MappedTest] = {}
+        for fc in fcx.functions:
+            symbol = index.resolve_function(path, fc.start_line, func_end=fc.end_line)
+            tests = self.function_tests.get(symbol) if symbol is not None else None
+            if tests:
+                out[fc.start_line] = tests[0]
+        return out
 
     def _findings(
         self, ctx: FileContext, fcx: FileComplexity
@@ -362,8 +408,12 @@ class FileEvaluator:
             duplication_pct=ctx.duplication_pct,
             **file_score_fields(analysed, scores, findings),
             is_test=bool(pf.file_info.is_test),
-            code_origin=self.analyzer._origins.get(ctx.file_path) or self.analyzer._origin(pf),
+            code_origin=ctx.code_origin,
         )
+
+    def _code_origin(self, pf: Any) -> str:
+        """The origin the walk recorded, else one read from the path alone."""
+        return self.analyzer._origins.get(pf.file_info.path) or self.analyzer._origin(pf)
 
     def _suggestions(
         self,
@@ -412,3 +462,13 @@ class FileEvaluator:
             else FileDataflowCache(self.analyzer.read_source)
         )
         return cache.get(pf.file_info.abs_path, pf.file_info.language).flagged_analyses()
+
+
+def _declares_only_types(file_path: str, pf: Any, read_source: SourceReader) -> bool:
+    """:func:`is_type_only` over the file's bytes, read only when its name allows it."""
+    if not may_be_type_only(file_path):
+        return False
+    source = read_source(pf.file_info.abs_path)
+    return source is not None and is_type_only(
+        file_path, source, is_test=bool(pf.file_info.is_test)
+    )

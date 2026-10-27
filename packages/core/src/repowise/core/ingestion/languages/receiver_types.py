@@ -347,6 +347,8 @@ _PY_FAMILY = (_PY_ANNOTATED, _PY_CONSTRUCTED, _PY_SELF_ANNOTATED, _PY_SELF_CONST
 _TS_FAMILY = (_TS_ANNOTATED, _TS_PARAMETER_PROPERTY, _TS_CONSTRUCTED)
 
 _LANGUAGE_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
+    # Apex declares Java's way (``Foo foo``) and has no ``var``.
+    "apex": (_TYPED_DECLARATION,),
     "cpp": (_CPP_DECLARATION,),
     "csharp": _C_FAMILY,
     "dart": _DART_FAMILY,
@@ -371,7 +373,7 @@ RECEIVER_TYPE_LANGUAGES = frozenset(_LANGUAGE_PATTERNS)
 # writes ``self.foo.bar()``, a dotted receiver the grammar mints no call site
 # for, so class scope could only bind a bare local to a field. Membership rests
 # on the scan actually finding typed fields in the language's idiom.
-IMPLICIT_FIELD_LANGUAGES = frozenset({"csharp", "dart", "java", "kotlin", "swift"})
+IMPLICIT_FIELD_LANGUAGES = frozenset({"apex", "csharp", "dart", "java", "kotlin", "swift"})
 
 # Languages whose scan keeps a declaration of a builtin type, marked external,
 # so the resolver can refuse a call on it instead of matching the method name.
@@ -379,8 +381,9 @@ IMPLICIT_FIELD_LANGUAGES = frozenset({"csharp", "dart", "java", "kotlin", "swift
 # extension methods, Kotlin and Swift extensions and Rust trait impls all can.
 EXTERNAL_TYPE_LANGUAGES = frozenset({"java"})
 # Those, and Kotlin, whose scan keeps the marked declaration without refusing:
-# a call on it may still reach a repo extension of the builtin.
-_MARKED_BUILTIN_LANGUAGES = EXTERNAL_TYPE_LANGUAGES | {"kotlin"}
+# a call on it may still reach a repo extension of the builtin. Apex keeps it so
+# a builtin-typed local still reads as a variable and types overload arguments.
+_MARKED_BUILTIN_LANGUAGES = EXTERNAL_TYPE_LANGUAGES | {"kotlin", "apex"}
 _EXTERNAL_TYPE = "external:"
 
 # A decorator that changes what the symbol it wraps *is*: `@shared_task` leaves
@@ -868,6 +871,7 @@ _LANGUAGE_BLOCK_COMMENTS: dict[str, re.Pattern[str]] = {
 }
 
 _LANGUAGE_COMMENTS: dict[str, re.Pattern[str]] = {
+    "apex": _LINE_COMMENT,
     "cpp": _LINE_COMMENT,
     "csharp": _LINE_COMMENT,
     "dart": _LINE_COMMENT,
@@ -966,9 +970,15 @@ def _usable_type_name(raw: str, language: str) -> tuple[str | None, bool]:
         return None, False
     inner = unwrap_pointer_like(raw) if language == "cpp" else None
     name = inner or (raw if raw.isidentifier() else bare_type_name(raw))
-    if not is_resolvable_type_name(name, language):
+    if not is_resolvable_type_name(name, language) and not _apex_member_of_repo_type(raw, language):
         return None, False
     return written_type_key(name, raw, language), inner is not None
+
+
+def _apex_member_of_repo_type(raw: str, language: str) -> bool:
+    """``LoggerPlugin.Batchable``: a member type named like a builtin, qualified by a repo type."""
+    qualifier = type_qualifier(raw) if language == "apex" else None
+    return bool(qualifier) and is_resolvable_type_name(bare_type_name(qualifier), language)
 
 
 # Languages whose constructor parameter lists sit at class scope, unextracted,
@@ -1624,3 +1634,154 @@ def clauses_in_span(
     first = bisect_left(clauses, start_line, key=lambda c: c.line)
     last = bisect_right(clauses, end_line, key=lambda c: c.line)
     return clauses[first:last]
+
+
+# Dart's one-element ``Iterable`` callbacks. ``items.forEach((p) => p.m())``
+# binds ``p`` to an element of ``items``, though no type is spelled. ``fold``
+# leads with its accumulator and ``reduce`` and ``sort`` take two parameters,
+# so none of those is read: only a callback of exactly one element is.
+DART_CALLBACK_METHODS = (
+    "forEach",
+    "map",
+    "where",
+    "any",
+    "every",
+    "firstWhere",
+    "lastWhere",
+    "singleWhere",
+    "expand",
+)
+
+# ``head[.member[()]].method((name) => ..)``, or ``((name) { .. })``: the
+# function literal is the call's first argument and its list is one bare name.
+# A written type (``(Repo p) => ..``) is ``_DART_TYPED``'s and never matches
+# here. ``head`` follows no ``.``, so ``a.b.c.forEach`` is refused as the
+# for-in clause refuses ``a.b.c``.
+_DART_CALLBACK = re.compile(
+    rf"(?<![\w.$])(?P<head>{_DART_NAME})"
+    rf"(?:\??\.(?P<member>[A-Za-z_]\w*)(?P<call>\(\))?)?"
+    rf"\??\.(?P<method>{'|'.join(DART_CALLBACK_METHODS)})\s*\(\s*"
+    rf"\(\s*(?P<name>{_DART_NAME})\s*\)\s*(?:async\s*)?(?P<arrow>=>|\{{)"
+)
+
+
+class DartCallback(NamedTuple):
+    """One function literal handed to an ``Iterable`` method, and where it lives.
+
+    ``name`` is the literal's one parameter. ``start`` and ``end`` are the
+    lines the literal covers, and ``begin`` and ``finish`` its offsets, which
+    tell a literal nested in another from one beside it on the same line.
+    ``head``, ``member`` and ``call`` read the receiver as a for-in clause does.
+    """
+
+    start: int
+    end: int
+    begin: int
+    finish: int
+    name: str
+    head: str
+    member: str
+    call: bool
+    method: str
+
+
+def _skip_dart_string(text: str, at: int) -> int:
+    """The offset just past the string literal opening at *at*, or -1 if unterminated.
+
+    Interpolation is skipped with the string. Ceiling: a quote of the string's
+    own kind inside an interpolation (``'${m['k']}'``) ends it early.
+    """
+    quote = text[at]
+    closer = quote * 3 if text.startswith(quote * 3, at) else quote
+    raw = at > 0 and text[at - 1] == "r"
+    index = at + len(closer)
+    while index < len(text):
+        if text[index] == "\\" and not raw:
+            index += 2
+        elif text.startswith(closer, index):
+            return index + len(closer)
+        elif len(closer) == 1 and text[index] == "\n":
+            return -1
+        else:
+            index += 1
+    return -1
+
+
+def _callback_end(cleaned: str, at: int, block: bool) -> int | None:
+    """The offset just past the function literal whose body starts at *at*.
+
+    A block body ends at the brace matching the one before *at*. An expression
+    body ends at the comma or unmatched parenthesis that closes the argument.
+    None where the brackets never balance, so the literal is dropped, not
+    guessed at.
+    """
+    depth = 1 if block else 0
+    index = at
+    while index < len(cleaned):
+        char = cleaned[index]
+        if char in "'\"":
+            index = _skip_dart_string(cleaned, index)
+            if index < 0:
+                return None
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+            if block and depth == 0:
+                return index + 1
+            if not block and depth < 0:
+                return index
+        elif not block and depth == 0 and char in ",;":
+            return index
+        index += 1
+    return None
+
+
+def scan_dart_callbacks(text: str) -> tuple[DartCallback, ...]:
+    """Every one-element ``Iterable`` callback *text* passes, in source order."""
+    cleaned = _without_comments(text, "dart")
+    starts = [0, *(newline.end() for newline in _NEWLINE.finditer(cleaned))]
+    found: list[DartCallback] = []
+    for match in _DART_CALLBACK.finditer(cleaned):
+        finish = _callback_end(cleaned, match.end(), match.group("arrow") == "{")
+        if finish is None:
+            continue
+        found.append(
+            DartCallback(
+                bisect_right(starts, match.start("name")),
+                bisect_right(starts, max(finish - 1, match.start("name"))),
+                match.start("name"),
+                finish,
+                match.group("name"),
+                match.group("head"),
+                match.group("member") or "",
+                bool(match.group("call")),
+                match.group("method"),
+            )
+        )
+    return tuple(found)
+
+
+def callbacks_in_span(
+    callbacks: tuple[DartCallback, ...], start_line: int, end_line: int
+) -> tuple[DartCallback, ...]:
+    """The callbacks whose parameter sits inside one function body, in source order."""
+    return tuple(c for c in callbacks if start_line <= c.start <= end_line)
+
+
+def callbacks_binding(
+    callbacks: Iterable[DartCallback], name: str, line: int
+) -> tuple[DartCallback, ...]:
+    """The innermost callbacks that bind *name* on *line*.
+
+    A literal nested in another covers the same lines, so the outer one is
+    dropped. Two literals side by side on one line cannot be told apart by
+    line alone, so both stay and the caller must agree between them.
+    """
+    covering = [c for c in callbacks if c.name == name and c.start <= line <= c.end]
+    return tuple(
+        c
+        for c in covering
+        if not any(o is not c and c.begin < o.begin and o.finish <= c.finish for o in covering)
+    )
